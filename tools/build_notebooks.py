@@ -251,6 +251,17 @@ cfg = EXPERIMENTS[EXPERIMENT]
 out_dir = Path("/kaggle/working") / f"run_{EXPERIMENT}"
 out_dir.mkdir(parents=True, exist_ok=True)
 
+# fail in seconds, not sessions: Kaggle's torch has no sm_60 (P100) kernels
+if torch.cuda.is_available():
+    cap = torch.cuda.get_device_capability(0)
+    name = torch.cuda.get_device_name(0)
+    print(f"GPU: {name} (sm_{cap[0]}{cap[1]})")
+    if cap[0] < 7:
+        raise RuntimeError(
+            f"{name} (sm_{cap[0]}{cap[1]}) is unsupported by this torch build — "
+            f"session must use the T4 (machine_shape NvidiaTeslaT4). Re-push."
+        )
+
 if RESUME_FROM:
     # fail loudly: a silent fall-through here burns a whole GPU session
     # restarting from step 0 while the log still says "resuming"

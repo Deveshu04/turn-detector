@@ -55,6 +55,9 @@ KERNELS = {
         "metadata": {
             "language": "python", "kernel_type": "notebook",
             "is_private": True, "enable_gpu": True, "enable_internet": True,
+            # Kaggle's torch build ships sm_70+ kernels only; the P100 default
+            # (sm_60) dies with "no kernel image". Pin the T4 (sm_75).
+            "machine_shape": "NvidiaTeslaT4",
             "dataset_sources": [f"{USER}/hinglish-synth"],
             "competition_sources": [],
             "kernel_sources": [f"{USER}/turn-detect-01-data-prep"],
