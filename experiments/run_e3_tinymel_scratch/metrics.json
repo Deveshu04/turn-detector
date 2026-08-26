@@ -1,0 +1,122 @@
+{
+  "experiment": "e3_tinymel_scratch",
+  "config": {
+    "name": "e3_tinymel_scratch",
+    "arch": "tinymel",
+    "use_hinglish_synth": true,
+    "pause_cut_p": 0.15,
+    "trailing_silence_p": 0.5,
+    "noise_p": 0.25,
+    "speed_p": 0.25,
+    "epochs": 8,
+    "batch_size": 64,
+    "lr_encoder": 1e-05,
+    "lr_head": 0.0003,
+    "weight_decay": 0.01,
+    "warmup_frac": 0.05,
+    "grad_clip": 1.0,
+    "seed": 42,
+    "checkpoint_every_steps": 500,
+    "notes": "from-scratch ~1M param model, same data/aug as e2"
+  },
+  "params": 507265,
+  "train_rows": 46908,
+  "best_val_auc": 0.9467,
+  "history": [
+    {
+      "step": 733,
+      "val_auc": 0.8869,
+      "val_acc_050": 0.801
+    },
+    {
+      "step": 1466,
+      "val_auc": 0.9136,
+      "val_acc_050": 0.833
+    },
+    {
+      "step": 2199,
+      "val_auc": 0.9277,
+      "val_acc_050": 0.8523
+    },
+    {
+      "step": 2932,
+      "val_auc": 0.9351,
+      "val_acc_050": 0.857
+    },
+    {
+      "step": 3665,
+      "val_auc": 0.9403,
+      "val_acc_050": 0.8698
+    },
+    {
+      "step": 4398,
+      "val_auc": 0.9453,
+      "val_acc_050": 0.8762
+    },
+    {
+      "step": 5131,
+      "val_auc": 0.9465,
+      "val_acc_050": 0.8817
+    },
+    {
+      "step": 5864,
+      "val_auc": 0.9467,
+      "val_acc_050": 0.8873
+    }
+  ],
+  "threshold": 0.5300000000000001,
+  "test": {
+    "overall": {
+      "n": 9329,
+      "acc_050": 0.8704,
+      "acc_tuned": 0.8706,
+      "f1_tuned": 0.8731,
+      "auc": 0.9437
+    },
+    "english": {
+      "n": 7820,
+      "acc_050": 0.8684,
+      "acc_tuned": 0.8684,
+      "f1_tuned": 0.8704,
+      "auc": 0.9405
+    },
+    "hindi": {
+      "n": 1284,
+      "acc_050": 0.8847,
+      "acc_tuned": 0.884,
+      "f1_tuned": 0.8941,
+      "auc": 0.9616
+    },
+    "hinglish": {
+      "n": 225,
+      "acc_050": 0.8578,
+      "acc_tuned": 0.8711,
+      "f1_tuned": 0.8263,
+      "auc": 0.9485
+    },
+    "filler": {
+      "n": 2381,
+      "acc_050": 0.8559,
+      "acc_tuned": 0.8555,
+      "f1_tuned": 0.8356,
+      "auc": 0.9395
+    },
+    "human_audio": {
+      "n": 5367,
+      "acc_050": 0.8763,
+      "acc_tuned": 0.8767,
+      "f1_tuned": 0.8801,
+      "auc": 0.9478
+    },
+    "threshold": 0.5300000000000001
+  },
+  "train_minutes": 16.1,
+  "int8_subset": {
+    "n": 2000,
+    "acc_tuned": 0.876,
+    "auc": 0.9493,
+    "size_mb": 1.28,
+    "fp32_size_mb": 2.03,
+    "fp32_parity_max_dprob": 3.5762786865234375e-07
+  }
+}
