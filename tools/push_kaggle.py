@@ -62,11 +62,11 @@ KERNELS = {
     },
 }
 
-PREP_MOUNT = "/kaggle/input/turn-detect-01-data-prep/prep"
+PREP_MOUNT = "/kaggle/input/notebooks/deveshupathak/turn-detect-01-data-prep/prep"
 CKPT_SLUG = "turn-detect-ckpt"
 CKPT_DATASET = f"{USER}/{CKPT_SLUG}"
 CKPT_STAGE = PUSH_DIR / "ckpt_stage"
-CKPT_MOUNT = f"/kaggle/input/{CKPT_SLUG}"
+CKPT_MOUNT = f"/kaggle/input/datasets/deveshupathak/{CKPT_SLUG}"
 # mirrors TIME_BUDGET_MIN in tools/build_notebooks.py's TRAIN_CONFIG cell
 TIME_BUDGET_MIN = 630
 
@@ -99,7 +99,7 @@ def set_config_cell(nb_path: Path, experiment: str, resume: bool,
             cell.source = (
                 f'EXPERIMENT = "{experiment}"\n'
                 f'PREP = "{PREP_MOUNT}"\n'
-                f'HINGLISH = "/kaggle/input/hinglish-synth"\n'
+                f'HINGLISH = "/kaggle/input/datasets/deveshupathak/hinglish-synth"\n'
                 f'RESUME_FROM = "{resume_path}"\n'
                 f'TIME_BUDGET_MIN = {time_budget_min}'
             )

@@ -272,18 +272,40 @@ if RESUME_FROM:
         )
     print(f"resuming {EXPERIMENT} from {RESUME_FROM} @ step {head['step']}")
 
-# fail fast with a directory listing if a mount is missing/empty — a freshly
-# completed source kernel takes minutes to publish its output, and a kernel
-# pushed too early sees an empty mount (cost us one GPU session already)
-for mount in (PREP, HINGLISH):
-    if not Path(mount, "manifest.parquet").exists():
-        import subprocess
-        tree = subprocess.run(["find", "/kaggle/input", "-maxdepth", "3"],
-                              capture_output=True, text=True).stdout
-        raise RuntimeError(
-            f"{mount}/manifest.parquet not found. /kaggle/input contains:\n{tree}\n"
-            f"If the source kernel just finished, wait a few minutes and re-push."
-        )
+# Kaggle has used both flat (/kaggle/input/<slug>) and nested
+# (/kaggle/input/{datasets,notebooks}/<user>/<slug>) mount layouts, and a
+# source kernel's output takes minutes to publish after it completes — so
+# resolve mounts by searching rather than trusting a hardcoded path.
+import os
+
+def resolve_mount(configured: str, slug: str, marker: str = "manifest.parquet") -> str:
+    if Path(configured, marker).exists():
+        return configured
+    hits = []
+    for root, dirs, files in os.walk("/kaggle/input"):
+        dirs[:] = [d for d in dirs if d not in ("audio", "__pycache__")]
+        if root.count("/") > 8:
+            dirs[:] = []
+        if marker in files and slug in root:
+            hits.append(root)
+    if len(hits) == 1:
+        print(f"mount for {slug}: {configured} -> {hits[0]}")
+        return hits[0]
+    listing = "\n".join(sorted(
+        str(Path(r) / f) for r, _, fs in os.walk("/kaggle/input")
+        for f in fs if r.count("/") <= 6
+    )[:60])
+    raise RuntimeError(
+        f"could not resolve mount for {slug!r} (marker {marker}, hits={hits}).\n"
+        f"/kaggle/input contains:\n{listing}\n"
+        f"If the source kernel just finished, wait a few minutes and re-push."
+    )
+
+PREP = resolve_mount(PREP, "turn-detect-01-data-prep")
+HINGLISH = resolve_mount(HINGLISH, "hinglish-synth")
+if RESUME_FROM:
+    RESUME_FROM = resolve_mount(RESUME_FROM, "run_" + EXPERIMENT,
+                                marker="ckpt_last.pt")
 
 real = [(f"{PREP}/manifest.parquet", PREP)]
 synth = [(f"{HINGLISH}/manifest.parquet", HINGLISH)]
