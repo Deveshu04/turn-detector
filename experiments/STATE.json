@@ -1,0 +1,22 @@
+{
+  "updated": "2026-08-26",
+  "phases": {
+    "phase0_scaffold": "done",
+    "phase1a_hinglish_synth": "done — 2515 clips / 2.1h in synth/output/hinglish-synth.zip, awaiting Kaggle upload",
+    "phase1b_core_lib_notebooks": "in_progress",
+    "phase2_kaggle_training": "pending",
+    "phase3_analysis": "pending",
+    "phase4_ship": "pending"
+  },
+  "experiments": {
+    "e1_baseline": {"status": "pending", "notes": "EN(~35k)+HI(~12k) real, WhisperTinyTurn"},
+    "e2_hinglish_aug": {"status": "pending", "notes": "E1 data + hinglish-synth + pause/filler augmentation (headline model)"},
+    "e3_tinymel_scratch": {"status": "pending", "notes": "same data as E2, from-scratch TinyMelNet ~1-2M params"},
+    "e4_no_pause_aug": {"status": "pending", "notes": "E2 minus pause-injection ablation"}
+  },
+  "kaggle_assets": {
+    "hinglish_synth_dataset": null,
+    "prep_output_dataset": null
+  },
+  "user_actions_pending": []
+}

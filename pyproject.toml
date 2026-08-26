@@ -1,0 +1,34 @@
+[project]
+name = "turn-detector"
+version = "0.1.0"
+description = "Tiny audio turn-detection model (Hinglish-focused): Whisper-Tiny encoder + classifier head, trained on pipecat smart-turn data + synthetic Hinglish"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch>=2.4",
+    "torchaudio>=2.4",
+    "transformers>=4.44",
+    "onnx>=1.16",
+    "onnxruntime>=1.18",
+    "datasets>=2.20",
+    "huggingface_hub>=0.24",
+    "soundfile>=0.12",
+    "numpy>=1.26",
+    "polars>=1.5",
+    "edge-tts>=6.1",
+    "gradio>=4.44",
+    "matplotlib>=3.9",
+    "nbformat>=5.10",
+    "pytest>=8.0",
+    "onnxscript>=0.7.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/turn_detector"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

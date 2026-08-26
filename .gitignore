@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.idea/
+.ruff_cache/
+
+# local data artifacts (audio + intermediate); manifests and corpus text stay tracked
+data/
+synth/output/audio/
+synth/output/boundaries/
+synth/output/*.zip
+*.ckpt
+*.pt
+!models/**/*.pt
+
+# large HF caches
+.cache/
