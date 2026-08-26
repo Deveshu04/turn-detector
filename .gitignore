@@ -22,3 +22,4 @@ space/
 
 # error-analysis outputs (regenerable from run dirs)
 **/analysis/
+experiments/kaggle_output/
