@@ -10,26 +10,13 @@ the final audio sample always lands at the last mel frame; short clips are
 zero-padded on the LEFT.
 """
 
-import numpy as np
 import torch
 import torch.nn as nn
 
-SAMPLE_RATE = 16000
-WINDOW_SECONDS = 8.0
-N_SAMPLES = int(SAMPLE_RATE * WINDOW_SECONDS)   # 128000
-N_FFT = 400
-HOP = 160
-N_MELS = 80
-N_FRAMES = N_SAMPLES // HOP                      # 800 mel frames
-N_ENCODER_POSITIONS = N_FRAMES // 2              # 400 after Whisper's stride-2 conv
-
-
-def right_align(wav: np.ndarray, n_samples: int = N_SAMPLES) -> np.ndarray:
-    """Keep the last n_samples; left-pad with zeros if shorter."""
-    wav = wav[-n_samples:]
-    if len(wav) < n_samples:
-        wav = np.concatenate([np.zeros(n_samples - len(wav), dtype=wav.dtype), wav])
-    return wav.astype(np.float32)
+from turn_detector.common import (  # noqa: F401  (re-exported for callers)
+    HOP, N_ENCODER_POSITIONS, N_FFT, N_FRAMES, N_MELS, N_SAMPLES,
+    SAMPLE_RATE, WINDOW_SECONDS, right_align,
+)
 
 
 class LogMel(nn.Module):

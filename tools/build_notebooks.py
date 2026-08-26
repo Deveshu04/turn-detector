@@ -15,7 +15,8 @@ ROOT = Path(__file__).parent.parent
 SRC = ROOT / "src" / "turn_detector"
 OUT = ROOT / "notebooks" / "kaggle"
 
-MODULES = ["__init__", "features", "augment", "config", "model", "dataset", "train"]
+MODULES = ["__init__", "common", "features", "augment", "config", "model",
+           "dataset", "train"]
 
 
 # --------------------------------------------------------------------------

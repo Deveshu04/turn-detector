@@ -10,22 +10,35 @@ from pathlib import Path
 
 import numpy as np
 
-from turn_detector.features import (
+from turn_detector.common import (
     HOP, N_FFT, N_MELS, N_SAMPLES, SAMPLE_RATE, right_align,
 )
 
 
 class NumpyLogMel:
-    """Numpy twin of features.LogMel (same math, no torch)."""
+    """Numpy twin of features.LogMel (same math, no torch).
 
-    def __init__(self):
-        from transformers.audio_utils import mel_filter_bank, window_function
-        self.filters = mel_filter_bank(
-            num_frequency_bins=1 + N_FFT // 2, num_mel_filters=N_MELS,
-            min_frequency=0.0, max_frequency=8000.0,
-            sampling_rate=SAMPLE_RATE, norm="slaney", mel_scale="slaney",
-        )
-        self.window = window_function(N_FFT, "hann")
+    Mel filters come from a bundled .npz when available (keeps the demo Space
+    free of transformers), else transformers.audio_utils computes them.
+    """
+
+    def __init__(self, filters_npz: str | Path | None = None):
+        import os
+        candidates = [
+            filters_npz, os.environ.get("MEL_FILTERS_NPZ"),
+            Path(__file__).parent / "mel_filters.npz",
+        ]
+        path = next((p for p in candidates if p and Path(p).exists()), None)
+        if path is not None:
+            self.filters = np.load(path)["filters"]
+        else:
+            from transformers.audio_utils import mel_filter_bank
+            self.filters = mel_filter_bank(
+                num_frequency_bins=1 + N_FFT // 2, num_mel_filters=N_MELS,
+                min_frequency=0.0, max_frequency=8000.0,
+                sampling_rate=SAMPLE_RATE, norm="slaney", mel_scale="slaney",
+            )
+        self.window = np.hanning(N_FFT + 1)[:-1]  # periodic hann
 
     def __call__(self, wav: np.ndarray) -> np.ndarray:
         # vectorized STFT (~10x faster than transformers.audio_utils.spectrogram)
