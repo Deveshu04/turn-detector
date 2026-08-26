@@ -4,7 +4,9 @@ Step-based training (sampler draws with replacement, so batches are iid and a
 mid-run resume just continues from the saved step — no epoch bookkeeping).
 Checkpoints every cfg.checkpoint_every_steps to <out_dir>/ckpt_last.pt; a
 killed Kaggle session loses at most that many steps. Resume is automatic when
-the checkpoint's config hash matches.
+the checkpoint's config hash matches. Pass `time_budget_minutes` to have the
+run end itself at the next checkpoint before Kaggle's session wall — a commit
+run that is killed by the wall publishes no output at all.
 
 Final artifacts in out_dir: ckpt_best.pt, model_fp32.onnx, model_int8.onnx,
 metrics.json.
@@ -15,6 +17,7 @@ switch, not code evaluation.
 
 import json
 import math
+import os
 import time
 from pathlib import Path
 
@@ -31,13 +34,36 @@ from turn_detector.model import build_model, count_params
 
 # ---------------- metrics ----------------
 
+def _midranks(values: np.ndarray) -> np.ndarray:
+    """1-based ranks with ties averaged (the midrank convention).
+
+    Plain double-argsort breaks ties arbitrarily, which biases AUC whenever
+    scores collide (common after int8 quantisation or a saturated sigmoid).
+    """
+    order = np.argsort(values, kind="mergesort")
+    sorted_vals = values[order]
+    # first[i] = index of the first element equal to sorted_vals[i]
+    _, first_idx, counts = np.unique(sorted_vals, return_index=True,
+                                     return_counts=True)
+    group = np.repeat(np.arange(len(counts)), counts)
+    # mean of the 1-based positions spanned by each tie group
+    starts = first_idx[group] + 1
+    sizes = counts[group]
+    sorted_ranks = starts + (sizes - 1) / 2.0
+    ranks = np.empty(len(values), dtype=float)
+    ranks[order] = sorted_ranks
+    return ranks
+
+
 def rank_auc(labels: np.ndarray, scores: np.ndarray) -> float:
     """ROC-AUC via the rank-sum statistic (no sklearn dependency)."""
+    labels = np.asarray(labels)
+    scores = np.asarray(scores, dtype=float)
     pos = scores[labels == 1]
     neg = scores[labels == 0]
     if len(pos) == 0 or len(neg) == 0:
         return float("nan")
-    ranks = np.argsort(np.argsort(np.concatenate([pos, neg]))) + 1
+    ranks = _midranks(np.concatenate([pos, neg]))
     return float((ranks[: len(pos)].sum() - len(pos) * (len(pos) + 1) / 2)
                  / (len(pos) * len(neg)))
 
@@ -109,8 +135,19 @@ def predict(model, mel_fn, dataset, device, batch_size=64, num_workers=2):
 
 # ---------------- checkpointing ----------------
 
+def atomic_save(obj, path: Path):
+    """Write via a sibling tmp file + os.replace.
+
+    A Kaggle session killed mid-`torch.save` would otherwise leave a truncated
+    ckpt_last.pt and make the next run unresumable.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    torch.save(obj, tmp)
+    os.replace(tmp, path)
+
+
 def save_ckpt(path: Path, model, opt, sched, scaler, step, best_val_auc, cfg_hash):
-    torch.save({
+    atomic_save({
         "model": model.state_dict(), "opt": opt.state_dict(),
         "sched": sched.state_dict(), "scaler": scaler.state_dict(),
         "step": step, "best_val_auc": best_val_auc, "cfg_hash": cfg_hash,
@@ -123,8 +160,15 @@ def save_ckpt(path: Path, model, opt, sched, scaler, step, best_val_auc, cfg_has
 
 def train(cfg: ExperimentConfig, sources: dict, out_dir: str,
           device: str | None = None, steps_per_epoch: int | None = None,
-          num_workers: int = 2):
-    """sources: {"train": [(manifest, root), ...], "val": ..., "test": ...}"""
+          num_workers: int = 2, time_budget_minutes: float | None = None):
+    """sources: {"train": [(manifest, root), ...], "val": ..., "test": ...}
+
+    time_budget_minutes: stop cleanly at the next checkpoint once this much
+    wall-clock has elapsed, returning {"status": "time_budget_reached", ...}
+    without final eval/export. Kaggle publishes no output from a commit run
+    that hits the 12 h wall, so a run that would overrun must end itself.
+    Not part of cfg.config_hash() — resuming with a different budget is fine.
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -175,12 +219,29 @@ def train(cfg: ExperimentConfig, sources: dict, out_dir: str,
             scaler.load_state_dict(state["scaler"])
             step = state["step"]
             best_val_auc = state["best_val_auc"]
+            # a kill between the ckpt_best and ckpt_last writes leaves
+            # ckpt_last's best_val_auc stale; trust whichever is higher
+            ckpt_best = out / "ckpt_best.pt"
+            if ckpt_best.exists():
+                b = torch.load(ckpt_best, map_location="cpu", weights_only=False)
+                best_val_auc = max(best_val_auc, float(b.get("val_auc", 0.0)))
             print(f"resumed from step {step} (best val AUC {best_val_auc:.4f})")
         else:
             print("checkpoint config hash mismatch — starting fresh")
 
     history = []
     t_start = time.time()
+
+    def budget_reached() -> bool:
+        return (time_budget_minutes is not None
+                and (time.time() - t_start) / 60.0 >= time_budget_minutes)
+
+    def budget_stop(step: int) -> dict:
+        print(f"TIME BUDGET REACHED at step {step}/{total_steps} — "
+              f"outputs saved; resume next run", flush=True)
+        return {"experiment": cfg.name, "status": "time_budget_reached",
+                "step": step, "total_steps": total_steps}
+
     epoch_pass = step // spe
     while step < total_steps:
         train_ds.set_epoch(epoch_pass)
@@ -214,6 +275,8 @@ def train(cfg: ExperimentConfig, sources: dict, out_dir: str,
             if step % cfg.checkpoint_every_steps == 0:
                 save_ckpt(ckpt_last, model, opt, sched, scaler, step,
                           best_val_auc, cfg.config_hash())
+                if budget_reached():
+                    return budget_stop(step)
 
             if step % spe == 0:  # epoch boundary -> validate
                 vl, vp = predict(model, mel_fn, val_ds, device,
@@ -226,12 +289,14 @@ def train(cfg: ExperimentConfig, sources: dict, out_dir: str,
                       f"acc@0.5 {val_acc:.4f}", flush=True)
                 if val_auc > best_val_auc:
                     best_val_auc = val_auc
-                    torch.save({"model": model.state_dict(),
-                                "cfg_hash": cfg.config_hash(),
-                                "step": step, "val_auc": val_auc},
-                               out / "ckpt_best.pt")
+                    atomic_save({"model": model.state_dict(),
+                                 "cfg_hash": cfg.config_hash(),
+                                 "step": step, "val_auc": val_auc},
+                                out / "ckpt_best.pt")
                 save_ckpt(ckpt_last, model, opt, sched, scaler, step,
                           best_val_auc, cfg.config_hash())
+                if budget_reached():
+                    return budget_stop(step)
                 model.train()
         epoch_pass += 1
 

@@ -1,8 +1,8 @@
 """Package the synthetic Hinglish set for Kaggle upload.
 
-- Dedupes manifest.jsonl, assigns sentence-level splits (85/8/15 would exceed
-  100 — actual: 77 train / 8 val / 15 test, hashed on sentence_id so no
-  sentence leaks across splits and cut/tail variants follow their parent).
+- Dedupes manifest.jsonl, assigns template-level splits (77 train / 8 val /
+  15 test, hashed on the `s###` template prefix of sentence_id so neither
+  slot-variants of a template nor cut/tail children leak across splits).
 - Audits label balance; downsamples the "cut" kind in TRAIN only if the
   incomplete class exceeds 55%.
 - Writes manifest.parquet and hinglish-synth.zip (FLAC already compressed,
@@ -20,11 +20,19 @@ from pathlib import Path
 import polars as pl
 
 OUT = Path(__file__).parent / "output"
-SEED_SALT = "hinglish-v1"
+SEED_SALT = "hinglish-v2"
 
 
 def split_of(sentence_id: str) -> str:
-    h = int(hashlib.md5((SEED_SALT + sentence_id).encode()).hexdigest(), 16) % 100
+    """Split on the TEMPLATE prefix, not the full sentence_id.
+
+    sentence_id is `s{template_idx:03d}_{combo}`; hashing the whole thing put
+    slot-variants of one template (near-identical wording) in different splits,
+    which leaks train text into val/test. Hashing only the `s###` prefix keeps
+    every variant of a template — and its cut/tail children — in one split.
+    """
+    template = sentence_id.split("_")[0]
+    h = int(hashlib.md5((SEED_SALT + template).encode()).hexdigest(), 16) % 100
     if h < 15:
         return "test"
     if h < 23:

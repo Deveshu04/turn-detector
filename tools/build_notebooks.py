@@ -36,10 +36,15 @@ FLAC + `manifest.parquet` to `/kaggle/working/prep`.
 Dataset from this notebook's output named **`smart-turn-enhi-prep`**
 (New Dataset → import from notebook output). Training runs attach that dataset.
 
-Interrupted? Just *Save & Run All* again — already-written clips are skipped.
+**Interrupted?** A committed batch run starts from an empty `/kaggle/working`,
+so there is nothing to resume from — just *Save & Run All* again. Prep normally
+finishes well inside a single session. (The resume bookkeeping in the code only
+helps when you re-run cells inside one live interactive session.)
 """
 
-PREP_PIP = "%pip install -q -U datasets soundfile polars"
+# datasets >= 4 routes Audio decoding through torchcodec (extra FFmpeg deps);
+# 3.x decodes with soundfile, which is already available on Kaggle images.
+PREP_PIP = '%pip install -q "datasets>=3.6,<4" soundfile polars'
 
 PREP_MAIN = r'''
 import hashlib, json, time
@@ -60,6 +65,20 @@ MAX_SECONDS = 8.0
 EN_TRAIN_CAP_PER_LABEL = 17500   # english train rows per label (35k total)
 VAL_PCT = 5                      # % of train-source rows held out as val
 
+# smart-turn v3.2 tags language with ISO-639-3 codes; the manifest (and every
+# downstream consumer) uses the long names, so normalise once here and key
+# EVERYTHING below -- rec, counters, resume rebuild -- on the long name.
+LANG_MAP = {"eng": "english", "hin": "hindi"}
+
+# a killed session can leave a half-written last line; drop it before appending
+if MANIFEST.exists() and MANIFEST.stat().st_size:
+    with open(MANIFEST, "rb+") as f:
+        f.seek(-1, 2)
+        if f.read(1) != b"\n":
+            cut = MANIFEST.read_bytes().rfind(b"\n")
+            f.truncate(cut + 1)
+            print(f"truncated partial last line (kept {cut + 1} bytes)")
+
 # ---- resume: rebuild done-set and counters from an existing manifest ----
 done_ids, counts = set(), {}
 if MANIFEST.exists():
@@ -77,9 +96,9 @@ print(f"resuming with {len(done_ids)} rows, counts={counts}")
 mf = open(MANIFEST, "a")
 
 def process(row, src):
-    lang = row["language"]
-    if lang not in ("english", "hindi"):
+    if row["language"] not in ("eng", "hin"):
         return 0
+    lang = LANG_MAP[row["language"]]
     label = int(bool(row["endpoint_bool"]))
     rid = row["id"]
     if rid in done_ids:
@@ -139,13 +158,20 @@ import polars as pl
 from pathlib import Path
 
 OUT = Path("/kaggle/working/prep")
-rows = [json.loads(l) for l in open(OUT / "manifest.jsonl")]
-seen, unique = set(), []
-for r in rows:
+seen, unique, bad = set(), [], 0
+for line in open(OUT / "manifest.jsonl"):
+    try:
+        r = json.loads(line)
+    except json.JSONDecodeError:
+        bad += 1
+        continue
     if r["id"] not in seen:
         seen.add(r["id"])
         unique.append(r)
-df = pl.DataFrame(unique)
+if bad:
+    print(f"skipped {bad} unparseable manifest lines")
+# infer_schema_length=None: midfiller/endfiller are null for long stretches
+df = pl.DataFrame(unique, infer_schema_length=None)
 df.write_parquet(OUT / "manifest.parquet")
 
 print(f"total {df.height} clips, {df['duration_s'].sum()/3600:.1f} h")
@@ -179,9 +205,18 @@ whisper-tiny once) · ~1-2 h per experiment.
 `e1_baseline` · `e2_hinglish_aug` · `e3_tinymel_scratch` · `e4_no_pause_aug`,
 then *Save Version → Save & Run All*. Repeat per experiment (one per session).
 
-**Resume after a kill:** attach the previous run's output, set `RESUME_FROM`
-to its path (e.g. `/kaggle/input/02-train/run_e2_hinglish_aug`), run again.
-Training continues from the last checkpoint (≤500 steps lost).
+**Time budget:** `TIME_BUDGET_MIN` (default 630 = 10.5 h) makes training stop
+itself at the next checkpoint before Kaggle's 12 h session wall. This matters:
+a commit run killed by the wall publishes **no output at all**, so a run that
+would overrun must end early and leave `ckpt_last.pt` behind to resume from.
+
+**Resume after a kill (or a time-budget stop):** attach the previous run's
+output (or the `turn-detect-ckpt` dataset built by
+`python -m tools.push_kaggle train <exp> --resume`), set `RESUME_FROM` to its
+path (e.g. `/kaggle/input/turn-detect-ckpt/run_e2_hinglish_aug`), run again.
+Training continues from the last checkpoint (≤500 steps lost). A missing
+checkpoint or a config-hash mismatch now raises instead of silently
+restarting from scratch.
 
 **Afterwards:** download `run_<EXPERIMENT>/` (metrics.json, ckpt_best.pt,
 model_fp32.onnx, model_int8.onnx) into the repo's `experiments/` folder.
@@ -198,12 +233,15 @@ TRAIN_CONFIG = r'''
 EXPERIMENT = "e1_baseline"   # e1_baseline | e2_hinglish_aug | e3_tinymel_scratch | e4_no_pause_aug
 PREP = "/kaggle/input/smart-turn-enhi-prep/prep"
 HINGLISH = "/kaggle/input/hinglish-synth"
-RESUME_FROM = ""             # e.g. "/kaggle/input/02-train/run_e2_hinglish_aug"
+RESUME_FROM = ""             # e.g. "/kaggle/input/turn-detect-ckpt/run_e2_hinglish_aug"
+TIME_BUDGET_MIN = 630        # stop cleanly at 10.5 h; Kaggle kills at 12 h with NO output
 '''
 
 TRAIN_RUN = r'''
 import shutil, sys
 from pathlib import Path
+
+import torch
 
 sys.path.insert(0, ".")
 from turn_detector.config import EXPERIMENTS
@@ -213,11 +251,26 @@ cfg = EXPERIMENTS[EXPERIMENT]
 out_dir = Path("/kaggle/working") / f"run_{EXPERIMENT}"
 out_dir.mkdir(parents=True, exist_ok=True)
 
-if RESUME_FROM and Path(RESUME_FROM, "ckpt_last.pt").exists():
+if RESUME_FROM:
+    # fail loudly: a silent fall-through here burns a whole GPU session
+    # restarting from step 0 while the log still says "resuming"
+    src_ckpt = Path(RESUME_FROM, "ckpt_last.pt")
+    if not src_ckpt.exists():
+        raise RuntimeError(
+            f"RESUME_FROM={RESUME_FROM!r} has no ckpt_last.pt. Attach the right "
+            f"input dataset/notebook output, or set RESUME_FROM = \"\" to start fresh."
+        )
     for f in Path(RESUME_FROM).glob("*"):
         if not (out_dir / f.name).exists():
             shutil.copy(f, out_dir / f.name)
-    print(f"copied previous run from {RESUME_FROM}")
+    head = torch.load(out_dir / "ckpt_last.pt", map_location="cpu", weights_only=False)
+    if head["cfg_hash"] != cfg.config_hash():
+        raise RuntimeError(
+            f"checkpoint cfg_hash {head['cfg_hash']} != {cfg.config_hash()} for "
+            f"{EXPERIMENT}: that checkpoint belongs to a different config. "
+            f"Set RESUME_FROM = \"\" to start fresh."
+        )
+    print(f"resuming {EXPERIMENT} from {RESUME_FROM} @ step {head['step']}")
 
 real = [(f"{PREP}/manifest.parquet", PREP)]
 synth = [(f"{HINGLISH}/manifest.parquet", HINGLISH)]
@@ -228,20 +281,46 @@ sources = {
     "test": real + synth,   # always evaluate hinglish slice, even for e1
 }
 
-metrics = train(cfg, sources, str(out_dir), num_workers=3)
+metrics = train(cfg, sources, str(out_dir), num_workers=3,
+                time_budget_minutes=TIME_BUDGET_MIN)
+
+if metrics.get("status") == "time_budget_reached":
+    print(
+        f"\nPARTIAL RUN: stopped at step {metrics['step']}/{metrics['total_steps']}.\n"
+        f"ckpt_last.pt is in run_{EXPERIMENT}/ and this version WILL publish its output.\n"
+        f"To continue:  python -m tools.push_kaggle train {EXPERIMENT} --resume\n"
+        f"(or manually: attach this version's output, set\n"
+        f" RESUME_FROM = \"/kaggle/input/turn-detect-ckpt/run_{EXPERIMENT}\", Save & Run All)\n"
+        f"No metrics.json/ONNX yet — those are written by the final run."
+    )
 '''
 
 TRAIN_SUMMARY = r'''
 import json
 from pathlib import Path
 
-m = json.loads((Path("/kaggle/working") / f"run_{EXPERIMENT}" / "metrics.json").read_text())
-print(json.dumps({k: m[k] for k in ("experiment", "params", "best_val_auc",
-                                    "threshold", "train_minutes")}, indent=2))
-print(json.dumps(m["test"], indent=2))
-print(json.dumps(m.get("int8_subset", {}), indent=2))
-print("\nNow: Save Version, then download run_" + EXPERIMENT + "/ into the repo's experiments/ folder.")
+run_dir = Path("/kaggle/working") / f"run_{EXPERIMENT}"
+mpath = run_dir / "metrics.json"
+if not mpath.exists():
+    print(f"no metrics.json in {run_dir} — partial run (see the cell above). "
+          f"Save Version so ckpt_last.pt is published, then resume.")
+    print("files:", sorted(p.name for p in run_dir.glob("*")))
+else:
+    m = json.loads(mpath.read_text())
+    head = {k: m[k] for k in ("experiment", "params", "best_val_auc",
+                              "threshold", "train_minutes") if k in m}
+    print(json.dumps(head, indent=2))
+    print(json.dumps(m.get("test", {}), indent=2))
+    print(json.dumps(m.get("int8_subset", {}), indent=2))
+    print("\nNow: Save Version, then download run_" + EXPERIMENT + "/ into the repo's experiments/ folder.")
 '''
+
+
+NB_METADATA = {
+    "kernelspec": {"name": "python3", "display_name": "Python 3",
+                   "language": "python"},
+    "language_info": {"name": "python"},
+}
 
 
 def code(source: str) -> nbf.NotebookNode:
@@ -250,6 +329,7 @@ def code(source: str) -> nbf.NotebookNode:
 
 def build_prep() -> nbf.NotebookNode:
     nb = nbf.v4.new_notebook()
+    nb.metadata.update(NB_METADATA)
     nb.cells = [
         nbf.v4.new_markdown_cell(PREP_MD),
         code(PREP_PIP),
@@ -261,6 +341,7 @@ def build_prep() -> nbf.NotebookNode:
 
 def build_train() -> nbf.NotebookNode:
     nb = nbf.v4.new_notebook()
+    nb.metadata.update(NB_METADATA)
     cells = [
         nbf.v4.new_markdown_cell(TRAIN_MD),
         code(TRAIN_PIP),

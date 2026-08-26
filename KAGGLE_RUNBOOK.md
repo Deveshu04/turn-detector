@@ -1,64 +1,141 @@
-# Kaggle Runbook — exact steps for every manual action
+# Kaggle Runbook — CLI workflow
 
-You need a **phone-verified Kaggle account** (Settings → Phone verification) to
-use GPUs and Internet-enabled notebooks.
+Everything below is driven from the repo with `tools/push_kaggle.py`. The
+manual click-path still works and is kept as an appendix at the bottom.
+
+## Prerequisites (once)
+
+- A **phone-verified Kaggle account** (Settings → Phone verification) — required
+  for GPU and Internet-enabled notebooks.
+- API token: Kaggle → Settings → **Create New Token** → save `kaggle.json` to
+  `%USERPROFILE%\.kaggle\kaggle.json` (Windows) or `~/.kaggle/kaggle.json`.
+- `pip install kaggle` in the venv.
+
+Notebooks are generated from the repo sources, so **always** regenerate before
+pushing (`push_kaggle` does this for you):
+
+```
+.venv/Scripts/python.exe -m tools.build_notebooks
+```
 
 ## Step 1 — Upload the Hinglish synthetic dataset (once, ~5 min)
 
-1. Go to kaggle.com → **Create → New Dataset**.
-2. Drag in `synth/output/hinglish-synth.zip` (122 MB). Kaggle auto-extracts zips.
-3. Title: **hinglish-synth** (URL slug must be `hinglish-synth`). → **Create**.
-4. Once created, open the dataset page and confirm you see `manifest.parquet`
-   and an `audio/` folder at the top level (not nested inside another folder).
-   If they're nested one level deep, note the folder name — you'll adjust the
-   `HINGLISH` path in the training notebook config cell accordingly.
+Build it, then create the dataset from the extracted folder:
 
-## Step 2 — Run data prep (once, CPU, ~1–2 h)
+```
+.venv/Scripts/python.exe -m synth.package_kaggle       # -> synth/output/hinglish-synth.zip
+kaggle datasets create -p synth/output/kaggle_upload
+```
 
-1. **Create → New Notebook** → File → Import Notebook → upload
-   `notebooks/kaggle/01_data_prep.ipynb`.
-2. Right panel → **Session options**: Accelerator = **None**,
-   Internet = **ON**.
-3. **Save Version → Save & Run All (Commit)**. You can close the tab; it runs
-   in the background (check *Your Work → notebook → Logs*).
-4. When finished: open the notebook's latest version → **Output** tab →
-   **New Dataset** (create dataset from output). Name it exactly
-   **`smart-turn-enhi-prep`**.
-   - If it was interrupted (rare): just Save & Run All again — it resumes,
-     already-written clips are skipped.
+`synth/output/kaggle_upload/` holds `dataset-metadata.json`
+(`"id": "deveshupathak/hinglish-synth"`) next to a copy of `hinglish-synth.zip`;
+Kaggle auto-extracts the zip on upload. Later refreshes use
+`kaggle datasets version -p synth/output/kaggle_upload -m "<msg>"`.
 
-## Step 3 — Training runs (GPU, ~1–2 h each, run sequentially)
+Confirm on the dataset page that `manifest.parquet` and `audio/` sit at the top
+level. If they end up nested one level deeper, adjust `HINGLISH` in
+`tools/push_kaggle.py` (`set_config_cell`).
+
+## Step 2 — Data prep (once, CPU, internet ON, ~1–2 h)
+
+```
+.venv/Scripts/python.exe -m tools.push_kaggle prep
+.venv/Scripts/python.exe -m tools.push_kaggle status prep     # poll
+```
+
+`push` uploads `notebooks/kaggle/01_data_prep.ipynb` as the kernel
+`turn-detect-01-data-prep` and starts a commit run. The train kernel mounts this
+kernel's latest output directly via `kernel_sources`, so **no dataset needs to be
+created from it**.
+
+If the prep run is interrupted, just push it again. A committed batch run starts
+from an empty `/kaggle/working`, so there is nothing to resume from — prep
+normally completes inside a single session.
+
+## Step 3 — Training runs (GPU, sequential)
 
 For each experiment `e1_baseline` → `e2_hinglish_aug` → `e3_tinymel_scratch`
 → `e4_no_pause_aug`:
 
-1. **Create → New Notebook** → import `notebooks/kaggle/02_train.ipynb`
-   (first time only; afterwards just edit the same notebook).
-2. Right panel → **Add Input** → *Datasets → Your Work* → attach
-   `smart-turn-enhi-prep` **and** `hinglish-synth`.
-3. Session options: Accelerator = **GPU T4 x2** (or P100), Internet = **ON**.
-4. In the **config cell**, set `EXPERIMENT = "<experiment id>"`.
-5. **Save Version → Save & Run All (Commit)**.
-6. When done: version page → **Output** tab → download `run_<experiment>/`
-   (contains `metrics.json`, `ckpt_best.pt`, `model_fp32.onnx`,
-   `model_int8.onnx`) and put it under `experiments/` in this repo, e.g.
-   `experiments/run_e1_baseline/metrics.json`.
+```
+.venv/Scripts/python.exe -m tools.push_kaggle train e2_hinglish_aug
+.venv/Scripts/python.exe -m tools.push_kaggle status train
+.venv/Scripts/python.exe -m tools.push_kaggle pull train experiments/run_e2_hinglish_aug
+```
 
-### If a GPU session dies mid-run
+`push_kaggle train` regenerates the notebook, rewrites the config cell
+(`EXPERIMENT`, `PREP`, `HINGLISH`, `RESUME_FROM`, `TIME_BUDGET_MIN`), attaches
+`hinglish-synth` + the prep kernel, and commits with GPU + internet on.
 
-1. Add Input → *Your Work → Notebooks* → attach the previous version's output
-   of the training notebook.
-2. Set `RESUME_FROM = "/kaggle/input/<notebook-slug>/run_<experiment>"` in the
-   config cell, Save & Run All. It continues from the last checkpoint
-   (≤500 training steps lost). Set `RESUME_FROM = ""` again for fresh runs.
+`pull` downloads `run_<experiment>/` (`metrics.json`, `ckpt_best.pt`,
+`model_fp32.onnx`, `model_int8.onnx`); put it under `experiments/` — Phase 3
+analysis reads `experiments/run_*/metrics.json`.
+
+### Time budget and resume
+
+Kaggle kills a commit run at the 12 h wall and publishes **no output at all**,
+which would lose the entire session. So `train()` takes
+`time_budget_minutes` (`TIME_BUDGET_MIN = 630`, i.e. 10.5 h): at the next
+checkpoint past the budget it saves `ckpt_last.pt`, prints
+`TIME BUDGET REACHED at step X/Y`, and returns
+`{"status": "time_budget_reached", ...}` **without** running the final eval or
+ONNX export. The version still completes, so its output is published.
+
+To continue such a run (or one that died for any other reason):
+
+```
+.venv/Scripts/python.exe -m tools.push_kaggle train e2_hinglish_aug --resume
+```
+
+That does the checkpoint round trip a kernel cannot do for itself:
+
+1. `kaggle kernels output turn-detect-02-train -p notebooks/push/ckpt_stage/`
+2. publishes that folder as the dataset `deveshupathak/turn-detect-ckpt`
+   (`datasets create` the first time, `datasets version -m` afterwards)
+3. pushes the train kernel with `turn-detect-ckpt` in `dataset_sources` and
+   `RESUME_FROM = "/kaggle/input/turn-detect-ckpt/run_<experiment>"`
+
+Training picks up from `ckpt_last.pt` (≤500 steps lost). The notebook now
+**hard-fails** if `RESUME_FROM` has no `ckpt_last.pt`, or if the checkpoint's
+`cfg_hash` doesn't match the experiment config — previously it silently
+restarted from step 0 while the log claimed it was resuming. `config_hash()`
+ignores `notes` and `checkpoint_every_steps`, so cosmetic edits don't invalidate
+a checkpoint.
+
+Run `stage-ckpt <experiment>` alone if you only want the dataset refreshed:
+
+```
+.venv/Scripts/python.exe -m tools.push_kaggle stage-ckpt e2_hinglish_aug
+```
 
 ## GPU budget
 
-~1–2 h per experiment × 4 experiments ≈ 6–8 GPU hours total, well inside the
-~30 h/week quota. Sessions auto-terminate at 12 h — one experiment always fits.
+~1–2 h per experiment × 4 experiments ≈ 6–8 GPU hours, well inside the ~30 h/week
+quota. Sessions auto-terminate at 12 h and the 10.5 h budget keeps a partial run
+recoverable.
 
 ## What to report back
 
-After each run, drop the `run_<experiment>/` folder into `experiments/` and
-say which experiments are done — analysis (Phase 3) starts from
-`experiments/run_*/metrics.json`.
+After each run, drop `run_<experiment>/` into `experiments/` and say which
+experiments are done.
+
+---
+
+## Appendix — manual fallback (no CLI)
+
+If the API token or CLI is unavailable:
+
+1. **Hinglish dataset:** kaggle.com → Create → New Dataset → drag in
+   `synth/output/hinglish-synth.zip` → title **hinglish-synth**.
+2. **Prep:** Create → New Notebook → File → Import Notebook →
+   `notebooks/kaggle/01_data_prep.ipynb`. Session options: Accelerator = None,
+   Internet = ON. **Save Version → Save & Run All (Commit)**. When it finishes,
+   Output tab → New Dataset → name it **`smart-turn-enhi-prep`**, and set
+   `PREP = "/kaggle/input/smart-turn-enhi-prep/prep"` in the train notebook.
+3. **Train:** import `notebooks/kaggle/02_train.ipynb`, Add Input →
+   `smart-turn-enhi-prep` + `hinglish-synth`, Accelerator = GPU T4 x2 (or P100),
+   Internet = ON, set `EXPERIMENT` in the config cell, Save & Run All.
+4. **Resume manually:** Add Input → Your Work → Notebooks → attach the previous
+   version's output, set
+   `RESUME_FROM = "/kaggle/input/<notebook-slug>/run_<experiment>"`,
+   Save & Run All. Set it back to `""` for fresh runs.

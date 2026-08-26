@@ -16,3 +16,9 @@ synth/output/*.zip
 
 # large HF caches
 .cache/
+
+# build artifact: assembled HF Space (python -m tools.build_space)
+space/
+
+# error-analysis outputs (regenerable from run dirs)
+**/analysis/

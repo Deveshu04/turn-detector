@@ -32,8 +32,17 @@ class ExperimentConfig:
     notes: str = ""
 
     def config_hash(self) -> str:
+        """Hash of the fields that change training maths.
+
+        Cosmetic/operational fields (`notes`, `checkpoint_every_steps`) are
+        excluded so editing a comment or checkpoint cadence does not invalidate
+        an in-flight run's resumable checkpoint.
+        """
+        d = asdict(self)
+        d.pop("notes", None)
+        d.pop("checkpoint_every_steps", None)
         return hashlib.sha1(
-            json.dumps(asdict(self), sort_keys=True).encode()
+            json.dumps(d, sort_keys=True).encode()
         ).hexdigest()[:10]
 
 

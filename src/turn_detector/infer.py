@@ -1,8 +1,9 @@
 """CPU inference wrapper around the exported ONNX model.
 
-Torch-free: mel extraction uses transformers' numpy WhisperFeatureExtractor
-math via audio_utils, so the Gradio Space only needs numpy + onnxruntime +
-transformers (no torch install).
+Torch-free: mel extraction reproduces Whisper's feature math in numpy against a
+bundled mel filterbank (mel_filters.npz), so the Gradio Space needs only numpy +
+onnxruntime — no torch, no transformers. transformers.audio_utils is used solely
+as a fallback to build the filters when the .npz is absent.
 """
 
 import time
