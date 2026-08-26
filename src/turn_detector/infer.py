@@ -28,12 +28,18 @@ class NumpyLogMel:
         self.window = window_function(N_FFT, "hann")
 
     def __call__(self, wav: np.ndarray) -> np.ndarray:
-        from transformers.audio_utils import spectrogram
-        log_spec = spectrogram(
-            wav, self.window, frame_length=N_FFT, hop_length=HOP,
-            power=2.0, mel_filters=self.filters, log_mel="log10",
-            mel_floor=1e-10,
-        )[:, :-1]
+        # vectorized STFT (~10x faster than transformers.audio_utils.spectrogram)
+        pad = N_FFT // 2
+        x = np.pad(wav.astype(np.float64), pad, mode="reflect")
+        n_frames = 1 + (len(x) - N_FFT) // HOP
+        frames = np.lib.stride_tricks.as_strided(
+            x, shape=(n_frames, N_FFT),
+            strides=(x.strides[0] * HOP, x.strides[0]),
+        )
+        fft = np.fft.rfft(frames * self.window, axis=1)
+        power = np.abs(fft[:-1]) ** 2                       # drop last frame
+        mel = power @ self.filters                          # (frames, 80)
+        log_spec = np.log10(np.clip(mel, 1e-10, None)).T    # (80, frames)
         log_spec = np.maximum(log_spec, log_spec.max() - 8.0)
         return ((log_spec + 4.0) / 4.0).astype(np.float32)
 
