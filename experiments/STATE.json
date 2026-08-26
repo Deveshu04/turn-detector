@@ -9,7 +9,7 @@
     "phase4_ship": "pending"
   },
   "experiments": {
-    "e1_baseline": {"status": "running-on-kaggle", "notes": "EN(~33k)+HI(~11k) real, WhisperTinyTurn; pushed 2026-08-26"},
+    "e1_baseline": {"status": "done", "notes": "acc 93.0% overall / 93.8 EN / 93.2 HI / 63.1 hinglish (AUC .61 — the gap E2 targets); 9.6 min on T4; int8 8.5MB"},
     "e2_hinglish_aug": {"status": "pending", "notes": "E1 data + hinglish-synth + pause/filler augmentation (headline model)"},
     "e3_tinymel_scratch": {"status": "pending", "notes": "same data as E2, from-scratch TinyMelNet ~1-2M params"},
     "e4_no_pause_aug": {"status": "pending", "notes": "E2 minus pause-injection ablation"}
