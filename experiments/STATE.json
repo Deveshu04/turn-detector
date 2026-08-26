@@ -3,13 +3,13 @@
   "phases": {
     "phase0_scaffold": "done",
     "phase1a_hinglish_synth": "done — 2515 clips / 2.1h in synth/output/hinglish-synth.zip, awaiting Kaggle upload",
-    "phase1b_core_lib_notebooks": "in_progress",
-    "phase2_kaggle_training": "pending",
+    "phase1b_core_lib_notebooks": "done — review fixes applied (eng/hin codes, template split v2, time-budget resume); hinglish-synth re-versioned; prep kernel v3 running",
+    "phase2_kaggle_training": "in_progress — prep COMPLETE (56110 clips, 7.0GB, EN 17.5k/label cap + all HI); e1_baseline pushed and running",
     "phase3_analysis": "pending",
     "phase4_ship": "pending"
   },
   "experiments": {
-    "e1_baseline": {"status": "pending", "notes": "EN(~35k)+HI(~12k) real, WhisperTinyTurn"},
+    "e1_baseline": {"status": "running-on-kaggle", "notes": "EN(~33k)+HI(~11k) real, WhisperTinyTurn; pushed 2026-08-26"},
     "e2_hinglish_aug": {"status": "pending", "notes": "E1 data + hinglish-synth + pause/filler augmentation (headline model)"},
     "e3_tinymel_scratch": {"status": "pending", "notes": "same data as E2, from-scratch TinyMelNet ~1-2M params"},
     "e4_no_pause_aug": {"status": "pending", "notes": "E2 minus pause-injection ablation"}

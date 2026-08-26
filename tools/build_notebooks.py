@@ -272,6 +272,19 @@ if RESUME_FROM:
         )
     print(f"resuming {EXPERIMENT} from {RESUME_FROM} @ step {head['step']}")
 
+# fail fast with a directory listing if a mount is missing/empty — a freshly
+# completed source kernel takes minutes to publish its output, and a kernel
+# pushed too early sees an empty mount (cost us one GPU session already)
+for mount in (PREP, HINGLISH):
+    if not Path(mount, "manifest.parquet").exists():
+        import subprocess
+        tree = subprocess.run(["find", "/kaggle/input", "-maxdepth", "3"],
+                              capture_output=True, text=True).stdout
+        raise RuntimeError(
+            f"{mount}/manifest.parquet not found. /kaggle/input contains:\n{tree}\n"
+            f"If the source kernel just finished, wait a few minutes and re-push."
+        )
+
 real = [(f"{PREP}/manifest.parquet", PREP)]
 synth = [(f"{HINGLISH}/manifest.parquet", HINGLISH)]
 train_sources = real + (synth if cfg.use_hinglish_synth else [])
