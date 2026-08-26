@@ -1,0 +1,102 @@
+{
+  "experiment": "e1_baseline",
+  "config": {
+    "name": "e1_baseline",
+    "arch": "whisper",
+    "use_hinglish_synth": false,
+    "pause_cut_p": 0.0,
+    "trailing_silence_p": 0.0,
+    "noise_p": 0.0,
+    "speed_p": 0.0,
+    "epochs": 4,
+    "batch_size": 64,
+    "lr_encoder": 1e-05,
+    "lr_head": 0.0001,
+    "weight_decay": 0.01,
+    "warmup_frac": 0.05,
+    "grad_clip": 1.0,
+    "seed": 42,
+    "checkpoint_every_steps": 500,
+    "notes": "EN+HI real data only, no augmentation, WhisperTinyTurn"
+  },
+  "params": 7885953,
+  "train_rows": 44751,
+  "best_val_auc": 0.9856,
+  "history": [
+    {
+      "step": 700,
+      "val_auc": 0.9797,
+      "val_acc_050": 0.9335
+    },
+    {
+      "step": 1400,
+      "val_auc": 0.9835,
+      "val_acc_050": 0.9375
+    },
+    {
+      "step": 2100,
+      "val_auc": 0.9847,
+      "val_acc_050": 0.9437
+    },
+    {
+      "step": 2800,
+      "val_auc": 0.9856,
+      "val_acc_050": 0.9437
+    }
+  ],
+  "threshold": 0.35000000000000003,
+  "test": {
+    "overall": {
+      "n": 9329,
+      "acc_050": 0.9295,
+      "acc_tuned": 0.9297,
+      "f1_tuned": 0.9296,
+      "auc": 0.9806
+    },
+    "english": {
+      "n": 7820,
+      "acc_050": 0.9377,
+      "acc_tuned": 0.938,
+      "f1_tuned": 0.9381,
+      "auc": 0.9841
+    },
+    "hindi": {
+      "n": 1284,
+      "acc_050": 0.9299,
+      "acc_tuned": 0.9315,
+      "f1_tuned": 0.9352,
+      "auc": 0.9847
+    },
+    "hinglish": {
+      "n": 225,
+      "acc_050": 0.64,
+      "acc_tuned": 0.6311,
+      "f1_tuned": 0.3566,
+      "auc": 0.6122
+    },
+    "filler": {
+      "n": 2381,
+      "acc_050": 0.9063,
+      "acc_tuned": 0.9118,
+      "f1_tuned": 0.897,
+      "auc": 0.971
+    },
+    "human_audio": {
+      "n": 5367,
+      "acc_050": 0.9475,
+      "acc_tuned": 0.9456,
+      "f1_tuned": 0.9459,
+      "auc": 0.9883
+    },
+    "threshold": 0.35000000000000003
+  },
+  "train_minutes": 9.6,
+  "int8_subset": {
+    "n": 2000,
+    "acc_tuned": 0.8795,
+    "auc": 0.9758,
+    "size_mb": 8.5,
+    "fp32_size_mb": 31.58,
+    "fp32_parity_max_dprob": 1.1920928955078125e-07
+  }
+}

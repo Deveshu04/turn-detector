@@ -23,3 +23,6 @@ space/
 # error-analysis outputs (regenerable from run dirs)
 **/analysis/
 experiments/kaggle_output/
+experiments/run_*/*.pt
+experiments/run_*/*.onnx
+experiments/run_*/*.log
