@@ -36,6 +36,17 @@ if MODEL_PATH is None:
     )
 detector = TurnDetector(MODEL_PATH, num_threads=2)
 
+# default decision threshold: tuned on the validation split during training
+DEFAULT_THRESHOLD = 0.5
+for metrics_candidate in (Path(MODEL_PATH).parent / "metrics.json",):
+    if metrics_candidate.exists():
+        import json
+        try:
+            DEFAULT_THRESHOLD = round(
+                float(json.loads(metrics_candidate.read_text())["threshold"]), 2)
+        except (KeyError, ValueError, json.JSONDecodeError):
+            pass
+
 
 def to_16k_mono(sr: int, wav: np.ndarray) -> np.ndarray:
     if wav.ndim > 1:
@@ -106,8 +117,8 @@ with gr.Blocks(title="Hinglish Turn Detection") as app:
         with gr.Column(scale=1):
             audio_in = gr.Audio(sources=["microphone", "upload"], type="numpy",
                                 label="Your speech")
-            threshold = gr.Slider(0.05, 0.95, value=0.5, step=0.05,
-                                  label="Decision threshold")
+            threshold = gr.Slider(0.05, 0.95, value=DEFAULT_THRESHOLD, step=0.01,
+                                  label="Decision threshold (tuned on validation)")
             btn = gr.Button("Detect turn", variant="primary")
         with gr.Column(scale=1):
             verdict = gr.Textbox(label="Verdict", interactive=False)

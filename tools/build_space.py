@@ -30,6 +30,7 @@ FILES = [
     ("src/turn_detector/infer.py", "turn_detector/infer.py"),
     ("src/turn_detector/mel_filters.npz", "turn_detector/mel_filters.npz"),
     ("models/model_int8.onnx", "model_int8.onnx"),
+    ("models/metrics.json", "metrics.json"),
 ]
 EXAMPLES_GLOB = ("demo/examples", "*.flac", "examples")
 
