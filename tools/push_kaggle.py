@@ -182,17 +182,30 @@ def stage_ckpt(experiment: str, need: str = "ckpt_last.pt",
                   for p in CKPT_STAGE.rglob("ckpt_*.pt"))
     print("staging:", ", ".join(kept))
 
+    # `--dir-mode zip` FLATTENS directory structure on extraction (verified:
+    # run_x/ckpt_best.pt mounted as bare ckpt_best.pt and broke the notebook's
+    # resolver). An explicitly-built zip keeps its internal paths on extraction,
+    # exactly like the hinglish-synth upload. So bundle by hand.
+    import zipfile
+    bundle = CKPT_STAGE / "ckpt_bundle.zip"
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_STORED) as z:
+        for p in CKPT_STAGE.rglob("ckpt_*.pt"):
+            z.write(p, p.relative_to(CKPT_STAGE).as_posix())
+    for p in list(CKPT_STAGE.rglob("ckpt_*.pt")):
+        p.unlink()
+    for p in sorted(CKPT_STAGE.rglob("*"), key=lambda q: -len(q.parts)):
+        if p.is_dir() and not any(p.iterdir()):
+            p.rmdir()
+
     exists, out = run_ok(["kaggle", "datasets", "status", CKPT_DATASET])
     missing = (not exists) or any(
         s in out for s in ("403", "404", "not found", "Not Found")
     )
-    # --dir-mode zip: Kaggle unpacks it back into run_<experiment>/ on mount
     if missing:
-        run(["kaggle", "datasets", "create", "-p", str(CKPT_STAGE),
-             "--dir-mode", "zip"])
+        run(["kaggle", "datasets", "create", "-p", str(CKPT_STAGE)])
     else:
         run(["kaggle", "datasets", "version", "-p", str(CKPT_STAGE),
-             "-m", f"resume checkpoint for {experiment}", "--dir-mode", "zip"])
+             "-m", f"resume checkpoint for {experiment}"])
     print(f"staged -> {CKPT_DATASET} (mounts at {CKPT_MOUNT}/run_{experiment})")
     return run_dir
 
