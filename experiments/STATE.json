@@ -1,18 +1,20 @@
 {
-  "updated": "2026-08-26",
+  "updated": "2026-08-27",
   "phases": {
     "phase0_scaffold": "done",
     "phase1a_hinglish_synth": "done — 2515 clips / 2.1h in synth/output/hinglish-synth.zip, awaiting Kaggle upload",
     "phase1b_core_lib_notebooks": "done — review fixes applied (eng/hin codes, template split v2, time-budget resume); hinglish-synth re-versioned; prep kernel v3 running",
-    "phase2_kaggle_training": "in_progress — prep COMPLETE (56110 clips, 7.0GB, EN 17.5k/label cap + all HI); e1_baseline pushed and running",
-    "phase3_analysis": "pending",
-    "phase4_ship": "pending"
+    "phase2_kaggle_training": "done — all E1-E4 complete",
+    "phase3_analysis": "done — REPORT.md, RESULTS.md, stress test",
+    "phase4_ship": "in_progress — awaiting HF login + GitHub remote from user; E5 (distillation) + E6 (full multilingual prep) extension in flight, README points at RESULTS.md for their final tables"
   },
   "experiments": {
     "e1_baseline": {"status": "done", "notes": "acc 93.0% overall / 93.8 EN / 93.2 HI / 63.1 hinglish (AUC .61 — the gap E2 targets); 9.6 min on T4; int8 8.5MB"},
-    "e2_hinglish_aug": {"status": "pending", "notes": "E1 data + hinglish-synth + pause/filler augmentation (headline model)"},
-    "e3_tinymel_scratch": {"status": "pending", "notes": "same data as E2, from-scratch TinyMelNet ~1-2M params"},
-    "e4_no_pause_aug": {"status": "pending", "notes": "E2 minus pause-injection ablation"}
+    "e2_hinglish_aug": {"status": "done", "notes": "shipped model: 95.1 hinglish / 93.8 overall, zero regression on EN/HI/human_audio; threshold 0.63; 10.6 min"},
+    "e3_tinymel_scratch": {"status": "done", "notes": "87.1 overall at 507k params / 1.28MB int8 — 6.7 pts behind E2, the gap E5 distillation targets"},
+    "e4_no_pause_aug": {"status": "done", "notes": "ablation: best static hinglish (96.4) but 28.9% of decisions flip after +1.0s silence vs 8.4% for E2 — why pause aug ships"},
+    "e5_distill": {"status": "pending", "notes": "TinyMelNet student distilled from the E2 (or E6) whisper teacher: alpha 0.3, T 2.0, e3 recipe; needs turn-detect-ckpt staged with the teacher's ckpt_best"},
+    "e6_full_data": {"status": "pending", "notes": "E2 recipe on the expanded prep (EN uncapped + 850/lang/label multilingual tail, train-only); needs prep kernel re-run first"}
   },
   "kaggle_assets": {
     "hinglish_synth_dataset": null,

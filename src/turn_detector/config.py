@@ -1,4 +1,4 @@
-"""Experiment configurations E1-E4."""
+"""Experiment configurations E1-E6."""
 
 import hashlib
 import json
@@ -16,6 +16,15 @@ class ExperimentConfig:
     trailing_silence_p: float = 0.0
     noise_p: float = 0.0
     speed_p: float = 0.0
+
+    # knowledge distillation (empty kd_teacher = plain supervised training).
+    # These stay IN config_hash: they define the experiment, and a checkpoint
+    # trained against a different teacher/temperature is not resumable as this
+    # one. Switching kd_teacher therefore invalidates the old checkpoint, which
+    # is the correct behaviour.
+    kd_teacher: str = ""               # experiment name whose ckpt_best is the teacher
+    kd_alpha: float = 0.3              # weight on hard-label BCE; 1-alpha on the soft term
+    kd_temperature: float = 2.0
 
     # optimization
     epochs: int = 4
@@ -80,5 +89,27 @@ EXPERIMENTS = {
         noise_p=0.25,
         speed_p=0.25,
         notes="ablation: e2 minus pause_cut and trailing_silence",
+    ),
+    "e5_distill": ExperimentConfig(
+        name="e5_distill",
+        arch="tinymel",
+        use_hinglish_synth=True,
+        pause_cut_p=0.15,
+        trailing_silence_p=0.5,
+        noise_p=0.25,
+        speed_p=0.25,
+        epochs=8,
+        lr_head=3e-4,
+        kd_teacher="e2_hinglish_aug",
+        notes="e3 recipe + distillation from the whisper teacher's soft targets",
+    ),
+    "e6_full_data": ExperimentConfig(
+        name="e6_full_data",
+        use_hinglish_synth=True,
+        pause_cut_p=0.15,
+        trailing_silence_p=0.5,
+        noise_p=0.25,
+        speed_p=0.25,
+        notes="E2 recipe on expanded multilingual prep",
     ),
 }

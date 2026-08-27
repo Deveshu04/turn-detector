@@ -24,13 +24,33 @@ MODULES = ["__init__", "common", "features", "augment", "config", "model",
 # --------------------------------------------------------------------------
 
 PREP_MD = """\
-# 01 · Data prep — filter smart-turn v3.2 to English + Hindi FLAC shards
+# 01 · Data prep — smart-turn v3.2 → English + Hindi + a multilingual tail
 
-**Kaggle settings:** CPU (no GPU needed) · **Internet ON** · takes ~1-2 h.
+**Kaggle settings:** CPU (no GPU needed) · **Internet ON** · takes ~2-3 h.
 
-Streams `pipecat-ai/smart-turn-data-v3.2-train` (41 GB, only EN/HI rows are
-decoded) and `-test`, resamples to 16 kHz mono, keeps the last 8 s, writes
-FLAC + `manifest.parquet` to `/kaggle/working/prep`.
+Streams `pipecat-ai/smart-turn-data-v3.2-train` (41 GB) and `-test`, resamples
+to 16 kHz mono, keeps the last 8 s, writes FLAC + `manifest.parquet` to
+`/kaggle/working/prep`.
+
+**Composition** (this is the E6 "full data" prep, a superset of the E1-E4 one):
+
+| stream | kept | cap |
+|---|---|---|
+| train, `eng` | all (effectively uncapped) | 33,000 / label |
+| train, `hin` | all | — |
+| train, everything else | a tail for multilingual robustness | 850 / (language, label) |
+| test | `eng` + `hin` only | — |
+
+English/Hindi are renamed to `english`/`hindi` (every downstream consumer masks
+on the long names); other languages keep their **raw ISO-639-3 code** and are
+all assigned `split="train"` — validation stays EN+HI so that best-checkpoint
+selection is comparable with the earlier experiments, and the test stream is
+untouched so the headline numbers keep meaning the same thing.
+
+**Size:** expect **~16-17 GB**; Kaggle's `/kaggle/working` limit is ~19.6 GB.
+The final cell prints the working-size total — that printout **is** the guard:
+if it comes out near 19 GB, lower `OTHER_CAP_PER_LANG_LABEL` and re-run rather
+than pushing a training job at a truncated dataset.
 
 **When it finishes:** *Save Version* → after it completes, create a Kaggle
 Dataset from this notebook's output named **`smart-turn-enhi-prep`**
@@ -62,13 +82,17 @@ MANIFEST = OUT / "manifest.jsonl"
 
 SR = 16000
 MAX_SECONDS = 8.0
-EN_TRAIN_CAP_PER_LABEL = 17500   # english train rows per label (35k total)
+EN_TRAIN_CAP_PER_LABEL = 33000   # english train rows per label (~all of them)
+OTHER_CAP_PER_LANG_LABEL = 850   # non-EN/HI train rows per (language, label)
 VAL_PCT = 5                      # % of train-source rows held out as val
 
 # smart-turn v3.2 tags language with ISO-639-3 codes; the manifest (and every
-# downstream consumer) uses the long names, so normalise once here and key
-# EVERYTHING below -- rec, counters, resume rebuild -- on the long name.
+# downstream consumer) uses the long names for the two languages we report on,
+# so normalise those once here and key EVERYTHING below -- rec, counters,
+# resume rebuild -- on the normalised value. Every other language keeps its raw
+# ISO code, which is what train.py's "multilingual_other" slice masks against.
 LANG_MAP = {"eng": "english", "hin": "hindi"}
+CORE = ("eng", "hin")
 
 # a killed session can leave a half-written last line; drop it before appending
 if MANIFEST.exists() and MANIFEST.stat().st_size:
@@ -96,16 +120,26 @@ print(f"resuming with {len(done_ids)} rows, counts={counts}")
 mf = open(MANIFEST, "a")
 
 def process(row, src):
-    if row["language"] not in ("eng", "hin"):
+    # a null language tag would otherwise write "language": null into the
+    # manifest and break every downstream string mask
+    code = row["language"] or "unk"
+    core = code in CORE
+    # the test stream stays EN+HI: overall/test numbers must keep comparing
+    # like with like across E1-E6.
+    if src == "test" and not core:
         return 0
-    lang = LANG_MAP[row["language"]]
+    lang = LANG_MAP.get(code, code)
     label = int(bool(row["endpoint_bool"]))
     rid = row["id"]
     if rid in done_ids:
         return 0
-    if src == "train" and lang == "english" and \
-            counts.get(("english", label, "train"), 0) >= EN_TRAIN_CAP_PER_LABEL:
-        return 0
+    if src == "train":
+        if lang == "english" and \
+                counts.get(("english", label, "train"), 0) >= EN_TRAIN_CAP_PER_LABEL:
+            return 0
+        if not core and \
+                counts.get((lang, label, "train"), 0) >= OTHER_CAP_PER_LANG_LABEL:
+            return 0
     wav = np.asarray(row["audio"]["array"], dtype=np.float32)
     if wav.ndim > 1:
         wav = wav.mean(axis=1)
@@ -117,6 +151,10 @@ def process(row, src):
     sf.write(sub / f"{rid}.flac", wav, SR, subtype="PCM_16")
     if src == "test":
         split = "test"
+    elif not core:
+        # multilingual tail is train-only on purpose: val must stay EN+HI so
+        # best-checkpoint selection is comparable across every experiment.
+        split = "train"
     else:
         split = "val" if int(hashlib.md5(rid.encode()).hexdigest(), 16) % 100 < VAL_PCT else "train"
     rec = {
@@ -182,7 +220,9 @@ print(df.group_by("split").agg(
 ))
 import shutil
 total_gb = sum(f.stat().st_size for f in OUT.rglob("*")) / 1e9
-print(f"output size: {total_gb:.1f} GB (must stay under ~19 GB)")
+print(f"output size: {total_gb:.1f} GB (expect ~16-17 GB; must stay under ~19.6 GB)")
+if total_gb > 19.0:
+    print("!! too close to the /kaggle/working limit — lower OTHER_CAP_PER_LANG_LABEL")
 '''
 
 
@@ -191,7 +231,7 @@ print(f"output size: {total_gb:.1f} GB (must stay under ~19 GB)")
 # --------------------------------------------------------------------------
 
 TRAIN_MD = """\
-# 02 · Train turn-detection experiment (E1-E4)
+# 02 · Train turn-detection experiment (E1-E6)
 
 **Kaggle settings:** GPU **T4 x2 or P100** · **Internet ON** (downloads
 whisper-tiny once) · ~1-2 h per experiment.
@@ -202,8 +242,17 @@ whisper-tiny once) · ~1-2 h per experiment.
 3. *(only when resuming)* the previous version's output of THIS notebook
 
 **Run an experiment:** set `EXPERIMENT` in the config cell to one of
-`e1_baseline` · `e2_hinglish_aug` · `e3_tinymel_scratch` · `e4_no_pause_aug`,
-then *Save Version → Save & Run All*. Repeat per experiment (one per session).
+`e1_baseline` · `e2_hinglish_aug` · `e3_tinymel_scratch` · `e4_no_pause_aug` ·
+`e5_distill` · `e6_full_data`, then *Save Version → Save & Run All*. Repeat per
+experiment (one per session).
+
+**Distillation (E5):** `e5_distill` trains TinyMelNet against a frozen Whisper
+teacher, so it additionally needs the teacher's `ckpt_best.pt`. Attach the
+`turn-detect-ckpt` dataset and set `TEACHER_FROM` to the teacher's run folder
+(e.g. `/kaggle/input/turn-detect-ckpt/run_e2_hinglish_aug`);
+`python -m tools.push_kaggle train e5_distill --teacher e2_hinglish_aug` stages
+that checkpoint and writes the path for you. The run raises immediately if the
+teacher is missing rather than silently training without it.
 
 **Time budget:** `TIME_BUDGET_MIN` (default 630 = 10.5 h) makes training stop
 itself at the next checkpoint before Kaggle's 12 h session wall. This matters:
@@ -230,10 +279,11 @@ TRAIN_PIP = "%pip install -q onnx onnxruntime onnxscript polars soundfile"
 TRAIN_SETUP = 'import os\nos.makedirs("turn_detector", exist_ok=True)'
 
 TRAIN_CONFIG = r'''
-EXPERIMENT = "e1_baseline"   # e1_baseline | e2_hinglish_aug | e3_tinymel_scratch | e4_no_pause_aug
+EXPERIMENT = "e1_baseline"   # e1_baseline | e2_hinglish_aug | e3_tinymel_scratch | e4_no_pause_aug | e5_distill | e6_full_data
 PREP = "/kaggle/input/smart-turn-enhi-prep/prep"
 HINGLISH = "/kaggle/input/hinglish-synth"
 RESUME_FROM = ""             # e.g. "/kaggle/input/turn-detect-ckpt/run_e2_hinglish_aug"
+TEACHER_FROM = ""            # e5_distill only: run folder holding the teacher's ckpt_best.pt
 TIME_BUDGET_MIN = 630        # stop cleanly at 10.5 h; Kaggle kills at 12 h with NO output
 '''
 
@@ -318,6 +368,21 @@ if RESUME_FROM:
     RESUME_FROM = resolve_mount(RESUME_FROM, "run_" + EXPERIMENT,
                                 marker="ckpt_last.pt")
 
+# distillation: the teacher's ckpt_best.pt rides in on the turn-detect-ckpt
+# dataset. Fail here rather than train a "distilled" student with no teacher.
+teacher_dir = None
+if getattr(cfg, "kd_teacher", ""):
+    if not TEACHER_FROM:
+        raise RuntimeError(
+            f"{EXPERIMENT} distills from {cfg.kd_teacher!r} but TEACHER_FROM is "
+            f"empty. Attach the turn-detect-ckpt dataset and set TEACHER_FROM = "
+            f'"/kaggle/input/turn-detect-ckpt/run_{cfg.kd_teacher}", or push with '
+            f"python -m tools.push_kaggle train {EXPERIMENT} --teacher {cfg.kd_teacher}"
+        )
+    teacher_dir = resolve_mount(TEACHER_FROM, "run_" + cfg.kd_teacher,
+                                marker="ckpt_best.pt")
+    print(f"teacher ({cfg.kd_teacher}): {teacher_dir}")
+
 real = [(f"{PREP}/manifest.parquet", PREP)]
 synth = [(f"{HINGLISH}/manifest.parquet", HINGLISH)]
 train_sources = real + (synth if cfg.use_hinglish_synth else [])
@@ -328,7 +393,7 @@ sources = {
 }
 
 metrics = train(cfg, sources, str(out_dir), num_workers=3,
-                time_budget_minutes=TIME_BUDGET_MIN)
+                time_budget_minutes=TIME_BUDGET_MIN, teacher_dir=teacher_dir)
 
 if metrics.get("status") == "time_budget_reached":
     print(
@@ -401,11 +466,27 @@ def build_train() -> nbf.NotebookNode:
     return nb
 
 
+def preserve_ids(nb: nbf.NotebookNode, path: Path) -> nbf.NotebookNode:
+    """Reuse the existing file's cell ids, positionally.
+
+    nbformat mints a random id per cell, so an otherwise no-op rebuild (the
+    test suite runs one) would rewrite every cell header and bury the real
+    change in id churn.
+    """
+    if not path.exists():
+        return nb
+    old = nbf.read(str(path), as_version=4)
+    for cell, prev in zip(nb.cells, old.cells):
+        if "id" in prev:
+            cell["id"] = prev["id"]
+    return nb
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     for name, nb in [("01_data_prep", build_prep()), ("02_train", build_train())]:
         path = OUT / f"{name}.ipynb"
-        nbf.write(nb, str(path))
+        nbf.write(preserve_ids(nb, path), str(path))
         print(f"wrote {path}")
 
 

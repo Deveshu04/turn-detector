@@ -47,6 +47,12 @@ smart-turn v3.2 test split plus a template-disjoint synthetic Hinglish split.
 
 Full tables including E4: [`experiments/RESULTS.md`](experiments/RESULTS.md).
 
+Two follow-ups are in flight and are **not** in the table above: **E5**
+(`e5_distill`, TinyMelNet distilled from the E2 teacher — closing E3's 6.7-point
+gap at 507k params) and **E6** (`e6_full_data`, the E2 recipe on an expanded prep
+that keeps all English plus a per-language multilingual tail). Whatever they
+score, `experiments/RESULTS.md` carries the final tables for every run.
+
 ### Silence stress test — why static accuracy is not enough
 
 Append silence to the 225 Hinglish test clips and re-run. Nothing about what was
@@ -76,7 +82,7 @@ Source: [`experiments/silence_stress_test.json`](experiments/silence_stress_test
 # install (Python 3.12)
 uv sync
 
-# tests — 31 of them, ~25 s
+# tests — 35 of them, ~30 s
 uv run python -m pytest -q
 
 # Gradio demo on localhost: record or upload a clip, watch the streaming
@@ -107,6 +113,15 @@ Training runs on Kaggle (free T4, ~10–16 min per experiment) — see
 
 ## Repo map
 
+```mermaid
+flowchart LR
+    A["last 8 s @ 16 kHz<br/>right-aligned"] --> B["log-mel<br/>80 × 800"]
+    B --> C["Whisper-Tiny encoder → 400 × 384<br/><i>or</i> DS-Conv ×4 + BiGRU → 100 × 256"]
+    C --> D["attention pool<br/>(learned query)"]
+    D --> E["LayerNorm → MLP head"]
+    E --> F["logit → σ → P(complete)"]
+```
+
 ```
 src/turn_detector/     library — the single source of truth
   common.py            audio constants + right-aligned 8 s windowing (torch-free)
@@ -116,7 +131,7 @@ src/turn_detector/     library — the single source of truth
   augment.py           pause_cut, trailing_silence, noise, speed
   dataset.py           manifest loading + label-flip-aware balanced sampler
   train.py             training loop, slice metrics, threshold tuning, ONNX export
-  config.py            E1-E4 experiment definitions
+  config.py            E1-E6 experiment definitions (incl. distillation knobs)
 synth/                 synthetic Hinglish corpus + edge-tts pipeline
   sentences.py         89 bilingual slot templates, fillers, conjunctions
   corpus.py            template expansion -> corpus_plan.jsonl
@@ -133,7 +148,7 @@ experiments/           REPORT.md, RESULTS.md, silence_stress_test.json, run_*/
 models/                shipped E2 artifacts (fp32 + int8 ONNX, metrics.json)
 demo/                  Gradio app + example clips
 docs/MODEL_CARD.md     HF model card
-tests/                 31 tests incl. HF feature-extractor parity
+tests/                 35 tests incl. HF feature-extractor parity
 ```
 
 ## Links

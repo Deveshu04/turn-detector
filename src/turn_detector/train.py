@@ -11,6 +11,9 @@ run that is killed by the wall publishes no output at all.
 Final artifacts in out_dir: ckpt_best.pt, model_fp32.onnx, model_int8.onnx,
 metrics.json.
 
+When cfg.kd_teacher is set the loss is blended with a frozen teacher's soft
+targets (E5); `teacher_dir` must then point at that experiment's ckpt_best.pt.
+
 Note for security scanners: `model.eval()` below is PyTorch's inference-mode
 switch, not code evaluation.
 """
@@ -110,6 +113,11 @@ def slice_metrics(rows: pl.DataFrame, labels: np.ndarray, probs: np.ndarray,
         "english": compute(lang == "english"),
         "hindi": compute(lang == "hindi"),
         "hinglish": compute(lang == "hinglish"),
+        # E6's prep adds a multilingual training tail whose manifest language is
+        # the raw ISO code; the v3.2 test split is EN+HI only, so this slice is
+        # n=0 there by construction — reported rather than hidden.
+        "multilingual_other": compute(
+            ~np.isin(lang, ("english", "hindi", "hinglish"))),
         "filler": compute(midf | endf),
         "human_audio": compute(~synth & (lang != "hinglish")),
         "threshold": threshold,
@@ -156,11 +164,42 @@ def save_ckpt(path: Path, model, opt, sched, scaler, step, best_val_auc, cfg_has
     }, path)
 
 
+# ---------------- distillation ----------------
+
+def load_teacher(cfg: ExperimentConfig, teacher_dir: str | None, device: str):
+    """Frozen teacher for distillation: <teacher_dir>/ckpt_best.pt.
+
+    Required — never optional — whenever cfg.kd_teacher is set: silently
+    training a "distilled" student against no teacher would burn a GPU session
+    and produce a run whose name lies about what it is.
+    """
+    if not teacher_dir:
+        raise ValueError(
+            f"{cfg.name}: kd_teacher={cfg.kd_teacher!r} requires train(..., "
+            f"teacher_dir=<dir containing that run's ckpt_best.pt>)"
+        )
+    ckpt = Path(teacher_dir) / "ckpt_best.pt"
+    if not ckpt.exists():
+        raise FileNotFoundError(
+            f"{cfg.name}: no ckpt_best.pt in {teacher_dir} for teacher "
+            f"{cfg.kd_teacher!r}"
+        )
+    state = torch.load(ckpt, map_location="cpu", weights_only=False)
+    teacher = build_model("whisper")
+    teacher.load_state_dict(state["model"] if "model" in state else state)
+    teacher = teacher.to(device).eval().requires_grad_(False)
+    print(f"teacher {cfg.kd_teacher}: {count_params(teacher):,} params "
+          f"from {ckpt} (step {state.get('step')}, "
+          f"val AUC {state.get('val_auc')})")
+    return teacher
+
+
 # ---------------- training ----------------
 
 def train(cfg: ExperimentConfig, sources: dict, out_dir: str,
           device: str | None = None, steps_per_epoch: int | None = None,
-          num_workers: int = 2, time_budget_minutes: float | None = None):
+          num_workers: int = 2, time_budget_minutes: float | None = None,
+          teacher_dir: str | None = None):
     """sources: {"train": [(manifest, root), ...], "val": ..., "test": ...}
 
     time_budget_minutes: stop cleanly at the next checkpoint once this much
@@ -168,6 +207,9 @@ def train(cfg: ExperimentConfig, sources: dict, out_dir: str,
     without final eval/export. Kaggle publishes no output from a commit run
     that hits the 12 h wall, so a run that would overrun must end itself.
     Not part of cfg.config_hash() — resuming with a different budget is fine.
+
+    teacher_dir: directory holding cfg.kd_teacher's ckpt_best.pt. Mandatory
+    when cfg.kd_teacher is set, ignored otherwise.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -206,6 +248,27 @@ def train(cfg: ExperimentConfig, sources: dict, out_dir: str,
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
     scaler = torch.amp.GradScaler(enabled=(device == "cuda"))
     loss_fn = torch.nn.BCEWithLogitsLoss()
+
+    # teacher is loaded before the resume block so a bad teacher path fails in
+    # seconds rather than after the first epoch
+    teacher = load_teacher(cfg, teacher_dir, device) if cfg.kd_teacher else None
+
+    def batch_loss(mel, label):
+        """Hard-label BCE, blended with the teacher's soft targets for KD.
+
+        The teacher sees the identical (augmented) mel batch the student does —
+        standard for response-based distillation, and it means the soft target
+        already accounts for the pause/noise/speed augmentation applied here.
+        """
+        logits = model(mel)
+        hard = loss_fn(logits, label)
+        if teacher is None:
+            return logits, hard
+        t = cfg.kd_temperature
+        with torch.no_grad():
+            soft_target = torch.sigmoid(teacher(mel) / t)
+        soft = loss_fn(logits / t, soft_target)
+        return logits, cfg.kd_alpha * hard + (1 - cfg.kd_alpha) * soft
 
     # resume
     step, best_val_auc = 0, 0.0
@@ -258,7 +321,7 @@ def train(cfg: ExperimentConfig, sources: dict, out_dir: str,
             mel = mel_fn(wav.to(device, non_blocking=True))
             label = label.to(device, non_blocking=True)
             with torch.autocast(device_type="cuda", enabled=(device == "cuda")):
-                loss = loss_fn(model(mel), label)
+                _, loss = batch_loss(mel, label)
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
             scaler.unscale_(opt)

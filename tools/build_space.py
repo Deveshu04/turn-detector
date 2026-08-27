@@ -3,8 +3,10 @@
 Usage:  python -m tools.build_space
 
 Copies the Gradio demo, the torch-free inference package (+ bundled mel
-filters), the int8 ONNX model and the example clips into space/, then writes
-requirements.txt and a README.md carrying HF Spaces front matter.
+filters), the int8 ONNX model(s) and the example clips into space/, then writes
+requirements.txt and a README.md carrying HF Spaces front matter. The distilled
+`model_tinymel_int8.onnx` (+ `metrics_tinymel.json`) is included when present —
+the demo's model dropdown lists whatever shipped.
 
 Idempotent: space/ is wiped and recreated on every run, so it is a pure build
 artifact (gitignored). Deploy with e.g.
@@ -31,6 +33,12 @@ FILES = [
     ("src/turn_detector/mel_filters.npz", "turn_detector/mel_filters.npz"),
     ("models/model_int8.onnx", "model_int8.onnx"),
     ("models/metrics.json", "metrics.json"),
+]
+# the distilled model (E5) ships too once it exists; app.py's dropdown offers
+# only the models it finds, so a Space built before E5 is still complete
+OPTIONAL_FILES = [
+    ("models/model_tinymel_int8.onnx", "model_tinymel_int8.onnx"),
+    ("models/metrics_tinymel.json", "metrics_tinymel.json"),
 ]
 EXAMPLES_GLOB = ("demo/examples", "*.flac", "examples")
 
@@ -120,6 +128,13 @@ def main() -> None:
     for src, dst in FILES:
         copy(ROOT / src, SPACE / dst)
         written.append(SPACE / dst)
+
+    for src, dst in OPTIONAL_FILES:
+        if (ROOT / src).exists():
+            copy(ROOT / src, SPACE / dst)
+            written.append(SPACE / dst)
+        else:
+            print(f"note: {src} absent — Space ships without it")
 
     ex_dir, pattern, ex_dst = EXAMPLES_GLOB
     examples = sorted((ROOT / ex_dir).glob(pattern)) if (ROOT / ex_dir).exists() else []

@@ -41,8 +41,27 @@ def test_prep_writes_normalised_language_names(notebooks):
     """The manifest must carry english/hindi: train.py slice_metrics and
     tools/aggregate_results.py both mask on the long names."""
     code = "\n".join(sources(notebooks["01_data_prep"]))
-    assert 'LANG_MAP[row["language"]]' in code
+    assert 'LANG_MAP.get(code, code)' in code      # eng/hin -> long names
     assert '"language": lang,' in code
+
+
+def test_prep_keeps_full_english_and_a_multilingual_tail(notebooks):
+    """E6 prep: English effectively uncapped, other languages capped per
+    (language, label) and train-only so val/test stay EN+HI."""
+    code = "\n".join(sources(notebooks["01_data_prep"]))
+    assert "EN_TRAIN_CAP_PER_LABEL = 33000" in code
+    assert "OTHER_CAP_PER_LANG_LABEL = 850" in code
+    # other languages keep their raw ISO code (LANG_MAP maps eng/hin only)
+    assert 'lang = LANG_MAP.get(code, code)' in code
+    # ...and never land in val: model selection must stay comparable
+    assert 'if src == "test" and not core' in code
+
+
+def test_train_notebook_wires_the_distillation_teacher(notebooks):
+    code = "\n".join(sources(notebooks["02_train"]))
+    assert "TEACHER_FROM" in code
+    assert "teacher_dir=teacher_dir" in code
+    assert 'marker="ckpt_best.pt"' in code
 
 
 def test_no_empty_writefile_cells(notebooks):

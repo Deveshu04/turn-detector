@@ -10,7 +10,8 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 EXP = ROOT / "experiments"
 
-ORDER = ["e1_baseline", "e2_hinglish_aug", "e3_tinymel_scratch", "e4_no_pause_aug"]
+ORDER = ["e1_baseline", "e2_hinglish_aug", "e3_tinymel_scratch", "e4_no_pause_aug",
+         "e5_distill", "e6_full_data"]
 SLICES = ["overall", "english", "hindi", "hinglish", "filler", "human_audio"]
 
 
