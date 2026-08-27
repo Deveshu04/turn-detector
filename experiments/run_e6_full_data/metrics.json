@@ -1,0 +1,108 @@
+{
+  "experiment": "e6_full_data",
+  "config": {
+    "name": "e6_full_data",
+    "arch": "whisper",
+    "use_hinglish_synth": true,
+    "pause_cut_p": 0.15,
+    "trailing_silence_p": 0.5,
+    "noise_p": 0.25,
+    "speed_p": 0.25,
+    "kd_teacher": "",
+    "kd_alpha": 0.3,
+    "kd_temperature": 2.0,
+    "epochs": 4,
+    "batch_size": 64,
+    "lr_encoder": 1e-05,
+    "lr_head": 0.0001,
+    "weight_decay": 0.01,
+    "warmup_frac": 0.05,
+    "grad_clip": 1.0,
+    "seed": 42,
+    "checkpoint_every_steps": 500,
+    "notes": "E2 recipe on expanded multilingual prep"
+  },
+  "params": 7885953,
+  "train_rows": 111509,
+  "best_val_auc": 0.9847,
+  "history": [
+    {
+      "step": 1743,
+      "val_auc": 0.9768,
+      "val_acc_050": 0.9245
+    },
+    {
+      "step": 3486,
+      "val_auc": 0.9822,
+      "val_acc_050": 0.9341
+    },
+    {
+      "step": 5229,
+      "val_auc": 0.9836,
+      "val_acc_050": 0.9449
+    },
+    {
+      "step": 6972,
+      "val_auc": 0.9847,
+      "val_acc_050": 0.9444
+    }
+  ],
+  "threshold": 0.5400000000000001,
+  "test": {
+    "overall": {
+      "n": 9329,
+      "acc_050": 0.9419,
+      "acc_tuned": 0.9429,
+      "f1_tuned": 0.9429,
+      "auc": 0.986
+    },
+    "english": {
+      "n": 7820,
+      "acc_050": 0.9448,
+      "acc_tuned": 0.945,
+      "f1_tuned": 0.9448,
+      "auc": 0.9866
+    },
+    "hindi": {
+      "n": 1284,
+      "acc_050": 0.9268,
+      "acc_tuned": 0.9307,
+      "f1_tuned": 0.934,
+      "auc": 0.9846
+    },
+    "hinglish": {
+      "n": 225,
+      "acc_050": 0.9289,
+      "acc_tuned": 0.9378,
+      "f1_tuned": 0.9239,
+      "auc": 0.9634
+    },
+    "multilingual_other": {
+      "n": 0
+    },
+    "filler": {
+      "n": 2381,
+      "acc_050": 0.9122,
+      "acc_tuned": 0.9152,
+      "f1_tuned": 0.9,
+      "auc": 0.9766
+    },
+    "human_audio": {
+      "n": 5367,
+      "acc_050": 0.9536,
+      "acc_tuned": 0.9536,
+      "f1_tuned": 0.9536,
+      "auc": 0.9895
+    },
+    "threshold": 0.5400000000000001
+  },
+  "train_minutes": 21.4,
+  "int8_subset": {
+    "n": 2000,
+    "acc_tuned": 0.8555,
+    "auc": 0.9792,
+    "size_mb": 8.5,
+    "fp32_size_mb": 31.58,
+    "fp32_parity_max_dprob": 1.1920928955078125e-07
+  }
+}
