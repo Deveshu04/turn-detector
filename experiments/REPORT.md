@@ -1,0 +1,525 @@
+# Tiny audio turn detection for Hinglish — experimental report
+
+## 1. Goal and framing
+
+A voice agent has to answer one question every few hundred milliseconds: *has the
+user finished their turn, or are they just pausing?* Voice-activity detection
+answers a different question — it tells you speech stopped, not that the thought
+finished. The gap between those two is where agents interrupt people.
+
+This project trains a small audio-only classifier for that decision. It consumes
+the last 8 seconds of the user's speech and emits a single probability,
+P(turn complete). It is meant to sit behind a VAD: the VAD fires on a silence
+threshold, the model decides whether that silence is a turn boundary or a
+mid-thought pause.
+
+The specific target is **Indian Hinglish** — code-switched Hindi/English with
+Devanagari and romanized text, Indian-accented prosody, and the filler
+vocabulary that comes with it (*haan, matlab, accha, yaar, umm, toh*). Two
+properties matter more than headline accuracy:
+
+1. **Trailing-silence invariance.** Appending silence to a clip must not change
+   the verdict. Silence is exactly what the model sees at the moment it is
+   asked, so a model that reads silence as "done" will cut people off.
+2. **Filler and trailing-conjunction sensitivity.** "*Mumbai mein traffic bahut
+   zyada kyunki…*" ends in silence and must still read as incomplete.
+
+Four experiments (E1–E4) isolate what actually buys those properties.
+
+## 2. Data preparation
+
+### 2.1 Real subset — pipecat smart-turn v3.2
+
+The English and Hindi rows of
+[`pipecat-ai/smart-turn-data-v3.2`](https://huggingface.co/datasets/pipecat-ai/smart-turn-data-v3.2-train)
+are streamed from the 41 GB train split and the official test split, resampled
+to 16 kHz mono, right-truncated to the last 8 s, and written as FLAC plus a
+`manifest.parquet` (`notebooks/kaggle/01_data_prep.ipynb`, generated from
+`tools/build_notebooks.py`).
+
+| quantity | value |
+|---|---|
+| train-split rows scanned | 270,946 |
+| English train rows kept per label | capped at 17,500 (35,000 train-source rows) |
+| Hindi train rows | all kept, no cap |
+| real train rows after 5% val holdout | 44,751 |
+| real val rows | 2,255 |
+| official test clips | 7,820 English + 1,284 Hindi = 9,104 |
+| total real clips written | 56,110 (7.0 GB FLAC) |
+
+Two details cost real debugging time and are worth recording. First, v3.2 tags
+language with **ISO-639-3** codes (`eng`, `hin`), not `en`/`hi`; filtering on the
+two-letter codes silently keeps zero rows. The prep code normalizes once at the
+boundary and every downstream consumer keys on the long names
+(`tests/test_notebooks.py::test_prep_filters_iso639_3_codes` pins this).
+Second, the English cap is applied per label, so the kept subset does not inherit
+the source distribution's class skew.
+
+The validation split is a 5% hash of the train-source ids; the **test split is
+the dataset's own official test split**, never a resample of train.
+
+### 2.2 Synthetic Hinglish pipeline
+
+Neither the real corpus nor any public corpus we found contains labelled
+code-switched Hinglish turn boundaries, so the Hinglish slice is synthesized
+(`synth/`).
+
+- **Corpus** (`synth/sentences.py`, `synth/corpus.py`): 89 hand-written slot
+  templates over everyday Indian service-app domains (delivery, recharge,
+  travel, leave approval, traffic), each written in both Devanagari and
+  romanized Latin. Slot expansion yields **189 concrete sentence instances**.
+- **Rendering** (`synth/tts_generate.py`): 4 Indian edge-tts neural voices —
+  `hi-IN-SwaraNeural`, `hi-IN-MadhurNeural`, `en-IN-NeerjaNeural`,
+  `en-IN-PrabhatNeural` — with word-boundary timestamps captured alongside the
+  audio.
+- **Incomplete variants** are built three ways: **`cut`** truncates a complete
+  utterance at a real word boundary (using the TTS boundary marks, so the cut
+  never lands mid-phoneme); **`tail_conj`** appends a dangling conjunction
+  (*aur, lekin, kyunki, toh, matlab, par, phir, agar*); **`tail_filler`**
+  appends a trailing filler (*umm, matlab, wo kya hai na, haan toh, actually,
+  basically, aisa hai ki, kya bolte hain usko*). **`midfiller_full`** is a
+  complete sentence with a filler injected mid-utterance (*matlab, accha, haan,
+  wo, umm, yaar, bas*) — a complete turn that superficially looks disfluent.
+
+Resulting corpus (`synth/output/manifest.parquet`): **2,469 clips / 2.07 hours**,
+1,283 Devanagari and 1,186 romanized.
+
+| kind | label | n |
+|---|---|---:|
+| `cut` | incomplete | 999 |
+| `full` | complete | 945 |
+| `tail_conj` | incomplete | 189 |
+| `tail_filler` | incomplete | 189 |
+| `midfiller_full` | complete | 147 |
+
+| split | templates | clips | % complete |
+|---|---:|---:|---|
+| train | 72 | 2,157 | 45.0% |
+| val | 6 | 87 | 37.9% |
+| test | 11 | 225 | 39.1% |
+
+The 225-clip test split breaks down as 107 `cut`, 75 `full`, 15 `tail_conj`,
+15 `tail_filler`, 13 `midfiller_full` — 88 complete and 137 incomplete.
+
+### 2.3 Methodology note — the leakage fix
+
+The first version of the split hashed the full `sentence_id`
+(`s{template:03d}_{slot_combo}`). Because slot variants of one template differ
+only in a filled slot ("मुंबई में traffic…" vs "पुणे में traffic…"), that put
+near-identical wording on both sides of the split: **69% of test templates also
+appeared in train**. The `cut` and `tail_*` children of a sentence inherited the
+same problem.
+
+The fix (`synth/package_kaggle.py::split_of`) hashes only the `s###` template
+prefix, so every slot variant of a template — and all of its cut/tail children —
+land in the same split. Measured on the shipped manifest, **train ∩ test
+templates = 0**, train ∩ val = 0, val ∩ test = 0. This was corrected before any
+model in this report was trained; every Hinglish number below comes from the
+template-disjoint split. The stale, pre-fix analysis artifact still sitting in
+`models/analysis/worst_errors.md` (433 clips, AUC 0.400) is from the old
+pipeline and should be ignored.
+
+Train is additionally rebalanced by dropping surplus `cut` rows whenever the
+incomplete class would exceed 55%.
+
+## 3. Architecture and training
+
+**WhisperTinyTurn** (E1, E2, E4) — the `openai/whisper-tiny` encoder with its
+positional embedding table sliced from 1500 to **400** positions, which pins the
+input to an 8 s window (128,000 samples → 800 mel frames → 400 encoder positions
+after Whisper's stride-2 conv stem). On top: learned-query attention pooling
+over time, then LayerNorm → Linear(384→256) → GELU → Dropout(0.1) →
+Linear(256→1). **7,885,953 parameters.**
+
+**TinyMelNet** (E3) — a from-scratch control with no pretrained weights: a
+stride-2 Conv1d stem plus three depthwise-separable Conv1d blocks over the mel
+frames, a BiGRU(128), and the same pooling and head. **507,265 parameters.**
+
+Both take log-mel `(B, 80, 800)`. The frontend is Whisper's exact feature math
+(STFT n_fft=400, hop=160, periodic Hann, 80 slaney mel filters, log10, 8 dB
+dynamic-range clamp, `(x+4)/4` scaling), implemented twice: a torch version for
+training and a numpy twin for inference.
+`tests/test_features.py::test_logmel_matches_hf_feature_extractor` checks the
+torch version against `transformers.WhisperFeatureExtractor`, and
+`test_numpy_logmel_matches_torch` checks the numpy twin against the torch one —
+which is what lets the Space ship without torch or transformers. Windows are
+**right-aligned**: the last 8 s are kept and shorter clips are left-padded, which
+matches inference, where the decision point is always the present moment.
+
+Training: Kaggle T4, AMP, AdamW, encoder LR 1e-5 / head LR 1e-4 (E3 head 3e-4),
+weight decay 0.01, 5% warmup then cosine decay, grad clip 1.0, batch 64, seed 42.
+E1/E2/E4 run 4 epochs; E3 runs 8 (it is smaller and trains from scratch).
+
+Sampling is step-based with a **balanced sampler that compensates for label
+flips**: `pause_cut` converts a complete clip into an incomplete one on the fly,
+so drawing 50/50 from the manifest would yield batches that are only
+`0.5 × (1 − p_cut)` complete. The sampler oversamples completes by
+`1/(1 − p_cut)` so post-augmentation batches are actually balanced
+(`dataset.py::balanced_sampler`, pinned by
+`tests/test_dataset.py::test_balanced_sampler_offsets_pause_cut`).
+
+The decision threshold is tuned on the validation split (maximizing accuracy)
+and then applied unchanged to the test split. It is not re-tuned per slice.
+
+## 4. Experiment matrix
+
+| run | arch | Hinglish synth | `pause_cut` | `trailing_silence` | `noise` | `speed` | epochs | train rows | T4 min |
+|---|---|---|---|---|---|---|---:|---:|---:|
+| E1 `e1_baseline` | Whisper | no | — | — | — | — | 4 | 44,751 | 9.6 |
+| E2 `e2_hinglish_aug` | Whisper | yes | 0.15 | 0.50 | 0.25 | 0.25 | 4 | 46,908 | 10.6 |
+| E3 `e3_tinymel_scratch` | TinyMelNet | yes | 0.15 | 0.50 | 0.25 | 0.25 | 8 | 46,908 | 16.1 |
+| E4 `e4_no_pause_aug` | Whisper | yes | — | — | 0.25 | 0.25 | 4 | 46,908 | 12.1 |
+
+`pause_cut` truncates a **complete** utterance at a speech-active point in the
+40–85% band of its active span and appends 0.2–1.2 s of silence; the label flips
+to incomplete. `trailing_silence` appends 0.2–1.2 s of silence to any clip and
+**preserves** the label. E4 is E2 with exactly those two removed, and it is the
+ablation that carries Finding 3.
+
+### Accuracy at the tuned threshold (fp32, official test split)
+
+| slice | n | E1 | E2 | E3 | E4 |
+|---|---:|---|---|---|---|
+| overall | 9,329 | 0.930 | **0.938** | 0.871 | 0.937 |
+| english | 7,820 | 0.938 | **0.938** | 0.868 | 0.937 |
+| hindi | 1,284 | 0.931 | **0.932** | 0.884 | 0.928 |
+| hinglish | 225 | 0.631 | 0.951 | 0.871 | **0.964** |
+| filler | 2,381 | 0.912 | **0.914** | 0.856 | 0.905 |
+| human_audio | 5,367 | 0.946 | **0.947** | 0.877 | 0.946 |
+
+### AUC (fp32, official test split)
+
+| slice | E1 | E2 | E3 | E4 |
+|---|---|---|---|---|
+| overall | 0.981 | 0.983 | 0.944 | **0.984** |
+| english | **0.984** | 0.983 | 0.941 | 0.983 |
+| hindi | **0.985** | 0.984 | 0.962 | 0.983 |
+| hinglish | 0.612 | 0.986 | 0.949 | **0.993** |
+| filler | **0.971** | 0.971 | 0.940 | 0.970 |
+| human_audio | **0.988** | 0.987 | 0.948 | 0.988 |
+
+### Footprint and threshold
+
+| | E1 | E2 | E3 | E4 |
+|---|---|---|---|---|
+| params | 7,885,953 | 7,885,953 | 507,265 | 7,885,953 |
+| fp32 ONNX | 31.58 MB | 31.58 MB | 2.03 MB | 31.58 MB |
+| int8 ONNX | 8.50 MB | 8.50 MB | 1.28 MB | 8.50 MB |
+| best val AUC | 0.986 | 0.984 | 0.947 | 0.984 |
+| tuned threshold | 0.35 | **0.63** | 0.53 | 0.35 |
+
+E2 is the shipped model (`models/`).
+
+## 5. Findings
+
+### 5.1 The baseline has a 63.1% Hinglish hole, and it is one failure family
+
+E1 — trained on 44,751 real English and Hindi clips with no augmentation — is a
+perfectly respectable turn detector on the data it saw: 93.8% on English
+(n=7,820), 93.1% on Hindi (n=1,284), AUC 0.984 and 0.985. On the 225 held-out
+Hinglish clips it collapses to **63.1% accuracy and AUC 0.612** — barely above
+the 60.9% you get by predicting "incomplete" for everything, and an AUC that says
+the ranking is close to uninformative.
+
+The per-kind breakdown (int8 model, threshold 0.35,
+`experiments/run_e1_baseline/analysis/worst_errors.md`) shows the failure is
+one-sided, not diffuse:
+
+| kind | label | n | E1 accuracy | mean P(complete) |
+|---|---|---:|---|---|
+| `full` | complete | 75 | **0.160** | 0.135 |
+| `midfiller_full` | complete | 13 | **0.077** | 0.083 |
+| `cut` | incomplete | 107 | 0.963 | 0.043 |
+| `tail_conj` | incomplete | 15 | 0.800 | 0.193 |
+| `tail_filler` | incomplete | 15 | 1.000 | 0.037 |
+
+Recall on complete Hinglish turns is **0.148** at precision 0.650. E1 has not
+learned "Hinglish is hard" — it has learned to say *incomplete* to nearly all
+Hinglish, which is right 137 times out of 225 by construction.
+
+The worst errors are a single coherent linguistic family: **complete sentences
+whose final constituent is a post-verb adverb.** The top 10 ranked by
+|prob − label| are all instances of the same construction, in both scripts:
+
+| text | prob | label |
+|---|---|---|
+| लखनऊ में traffic बहुत ज्यादा है **आज**। | 0.000 | complete |
+| मुंबई में traffic बहुत ज्यादा है **आज**। | 0.000 | complete |
+| पुणे में traffic बहुत ज्यादा है **आज**। | 0.000 | complete |
+| Indore mein traffic bahut zyada hai **aaj**. | 0.000 | complete |
+| Kolkata mein traffic bahut zyada hai **aaj**. | 0.000 | complete |
+
+Hindi is verb-final, so an English-trained prior expects the sentence to end at
+the verb (*hai*). A trailing adverb (*aaj*, "today") after the verb is completely
+ordinary in colloquial Hindi and Hinglish, but it reads to E1 as an interrupted
+continuation — and E1 assigns those clips P(complete) ≈ 0.000, not 0.4. That is
+not uncertainty; it is a confidently wrong prior about where a sentence is
+allowed to end. The same error rate holds for the romanized and the Devanagari
+renditions of the identical sentence, which rules out a script-specific artifact.
+
+### 5.2 Synthetic Hinglish closes the gap by 32 points with no regression elsewhere
+
+E2 adds 2,157 synthetic Hinglish training clips (4.6% of 46,908 rows) plus the
+augmentation recipe. On the same 225 template-disjoint test clips:
+
+| metric (fp32, n=225) | E1 | E2 | Δ |
+|---|---|---|---|
+| accuracy | 0.631 | **0.951** | **+32.0 pts** |
+| AUC | 0.612 | **0.986** | +0.374 |
+
+The failure family is gone. Per-kind (int8, threshold 0.63): `full` 0.907
+(n=75, was 0.160), `midfiller_full` 0.846 (n=13, was 0.077), `cut` 0.991
+(n=107), `tail_filler` 1.000 (n=15), `tail_conj` 0.867 (n=15). Recall on
+completes goes 0.148 → 0.898 at precision 0.963. The post-verb-adverb sentences
+that scored 0.000 now score 0.32–0.73 — E2's residual Hinglish errors sit near
+the threshold rather than confidently inverted, which is the behaviour you want
+from a model you are about to threshold-tune.
+
+Crucially, nothing else moves backwards:
+
+| slice | n | E1 | E2 |
+|---|---:|---|---|
+| english | 7,820 | 0.938 | 0.938 |
+| hindi | 1,284 | 0.931 | 0.932 |
+| filler | 2,381 | 0.912 | 0.914 |
+| human_audio | 5,367 | 0.946 | 0.947 |
+| overall | 9,329 | 0.930 | 0.938 |
+
+English AUC drifts 0.984 → 0.983 and Hindi 0.985 → 0.984 — differences of one in
+the third decimal on n=7,820 and n=1,284, i.e. noise. A 4.6% synthetic injection
+is not diluting the real-data signal.
+
+Two guards make this credible rather than a leakage artifact. The Hinglish test
+templates are disjoint from train (§2.3, measured: 0 overlap), so E2 is not
+recalling memorized wording. And `human_audio` — the real-human, non-synthetic
+slice of the official test set, n=5,367 — moves 0.946 → 0.947, so training on
+TTS audio has not pushed the model toward a synthetic-speech shortcut.
+
+### 5.3 The centerpiece: identical static metrics, opposite production behaviour
+
+E4 is E2 minus `pause_cut` and `trailing_silence`. On the static test set it is
+not merely competitive — **it looks better**:
+
+| slice | n | E2 | E4 |
+|---|---:|---|---|
+| hinglish acc | 225 | 0.951 | **0.964** |
+| hinglish AUC | 225 | 0.986 | **0.993** |
+| overall acc | 9,329 | **0.938** | 0.937 |
+| overall AUC | 9,329 | 0.983 | **0.984** |
+
+On the Hinglish slice E4 makes 8 errors to E2's 11 out of 225. Overall, the
+0.001 gap is about 11 clips out of 9,329. On every table in §4 an evaluator
+would call these two models equivalent, and would probably prefer E4.
+
+**They are not equivalent.** The stress test
+(`experiments/silence_stress_test.json`) takes the 225 local Hinglish test clips,
+appends 0.5 s and then 1.0 s of digital silence to each — a label-preserving edit
+that changes nothing about what was said — and re-runs both int8 models at their
+own tuned thresholds. A well-behaved turn detector returns the same verdict on
+all 225.
+
+| | E2 (`pause_cut` + `trailing_silence`) | E4 (no pause aug) |
+|---|---|---|
+| base accuracy, no padding (int8, n=225) | 0.947 | 0.942 |
+| decisions flipped by +0.5 s silence | **7 / 225 = 3.1%** | 26 / 225 = **11.6%** |
+| decisions flipped by +1.0 s silence | **19 / 225 = 8.4%** | 65 / 225 = **28.9%** |
+| early fires at +0.5 s (incomplete → complete) | **2 / 137 = 1.5%** | 23 / 137 = **16.8%** |
+| early fires at +1.0 s (incomplete → complete) | **7 / 137 = 5.1%** | 61 / 137 = **44.5%** |
+
+At a one-second pause, **E4 declares the turn over on 61 of the 137 clips where
+the speaker is still mid-thought** — 44.5%. E2 does it on 7, an 8.7× reduction.
+E4's flips are also almost entirely early fires (61 of its 65 flips at 1.0 s),
+which is the expensive direction: an early fire is the agent talking over the
+user, while a late fire is only added latency.
+
+The failure is easy to state. Without pause augmentation, "long trailing
+silence" and "turn complete" are perfectly correlated in the training data,
+because in a curated corpus every complete utterance was recorded to the end and
+every incomplete one was cut. The model learns the correlation instead of the
+linguistics, and the correlation is precisely the one that breaks in production.
+`pause_cut` destroys it by producing *incomplete* clips that end in silence;
+`trailing_silence` destroys the converse by padding both classes without touching
+labels.
+
+**Why static test sets cannot see this.** Every clip in the test set carries its
+recording's natural amount of trailing silence, which is short and — critically —
+correlated with the label in the same way the training data is. A model that has
+learned "silence ⇒ done" is *rewarded* by that test set: it scores 0.964 on
+Hinglish, the best of the four runs. The bias is invisible because the test
+distribution shares it. Only an intervention that breaks the correlation — hold
+the content fixed, vary the silence — separates the two models, and it separates
+them by a factor of nearly nine on the metric that actually matters.
+
+**Why trailing-silence invariance is the production property.** In deployment the
+model is not called on a curated clip; it is called by a VAD the moment speech
+energy drops, and then again, and again, while the user thinks. The input at
+every one of those calls is "everything said so far, followed by silence, and the
+silence keeps growing." A model whose verdict is a function of silence duration
+will, given enough thinking time, fire on every single utterance — the only
+question is how long the user gets. E4 gives them under a second. That is the
+entire failure mode users describe as "it keeps interrupting me," and no number
+in §4 predicts it.
+
+E2's 0.013 deficit on the static Hinglish slice is the price of this robustness,
+and it is a good trade: 3 extra errors out of 225 on a static benchmark, in
+exchange for 54 fewer interruptions out of 137 at a one-second pause.
+
+### 5.4 Secondary: the from-scratch control
+
+E3 uses the identical data and augmentation as E2 with a 507,265-parameter model
+— 15.5× smaller — and no pretrained weights. It reaches 0.871 overall (AUC
+0.944) against E2's 0.938 (AUC 0.983), and 0.871 on Hinglish (AUC 0.949, n=225).
+Its validation AUC was still climbing at the end of 8 epochs (0.9465 → 0.9467
+over the last epoch, up from 0.887 after the first), so this is a floor rather
+than a converged ceiling. The honest reading: Whisper's pretrained multilingual
+representation is worth roughly 6.7 accuracy points here, and the small model is
+a real option when the parameter budget is the binding constraint (§6).
+
+## 6. Latency and size
+
+Measured with `turn_detector.infer.benchmark` — int8 ONNX, onnxruntime
+CPUExecutionProvider, 8 s window, median over 100 iterations × 3 repeats.
+`total` includes numpy mel extraction; `model` is the ONNX session alone.
+
+| model | params | int8 size | total p50, 1 thread | model p50, 1 thread | total p50, 4 threads |
+|---|---:|---:|---:|---:|---:|
+| E2 WhisperTinyTurn | 7,885,953 | 8.50 MB | 91 ms | 83 ms | 59 ms |
+| E3 TinyMelNet | 507,265 | 1.28 MB | 14 ms | 7 ms | 18 ms |
+
+**These are laptop numbers and should be read as a conservative ceiling, not a
+server figure.** Two measurement sessions on the same Windows dev laptop
+disagreed by roughly 35%: an earlier session recorded E2 at ~126 ms total /
+~113 ms model single-threaded and ~127 ms at 4 threads, and E3 at 19.1 ms total /
+8.2 ms model. Consumer laptops throttle on thermal and power state, and the
+4-thread figure in particular is sensitive to background load — E3 is slower at
+4 threads than at 1 because the model is too small to amortize the thread
+handoff. For calibration, pipecat's smart-turn v3 reports **~12 ms** for the same
+encoder class on server CPU; a datacenter core is several times faster than this
+machine, so E2 on a server should land in the low tens of milliseconds.
+
+The mel frontend costs a fixed ~8 ms in both cases, which is why it dominates
+E3's budget (7 ms model + ~7 ms mel) and is a rounding error in E2's.
+
+**Choosing between them.** E2 at 8.5 MB and tens of milliseconds per call is the
+right default: the accuracy gap to E3 (0.938 vs 0.871 overall, 0.951 vs 0.871
+Hinglish) is large, and turn detection runs once per VAD pause, not per audio
+frame. E3 earns its place when the model must fit on-device alongside ASR and
+TTS, or when the CPU budget is genuinely single-digit milliseconds.
+
+## 7. int8 quantization
+
+Export is a two-step in `train.py::export_onnx`: `torch.onnx.export` at opset 17
+with a **static batch of 1** (turn detection is inherently one window at a time,
+and dynamic batch breaks the bidirectional-GRU reshape on export), then
+`onnxruntime.quantization.quantize_dynamic` with `QuantType.QUInt8` on weights.
+
+fp32 ONNX is checked against torch on every export: max |Δprob| = **1.19e-07**
+for the Whisper models and 3.58e-07 for TinyMelNet, so the graph conversion
+itself is lossless to float precision.
+
+| | fp32 ONNX | int8 ONNX | ratio |
+|---|---|---|---|
+| WhisperTinyTurn (E1/E2/E4) | 31.58 MB | 8.50 MB | 3.7× |
+| TinyMelNet (E3) | 2.03 MB | 1.28 MB | 1.6× |
+
+**Reading the int8 numbers correctly.** The int8 evaluation is *not* the full
+test set. It is a stratified 2,000-clip subset (1,000 per label, seeded) scored
+with the fp32-tuned threshold, chosen to keep the CPU eval bounded. Because it is
+class-balanced and the full test set is not, its accuracy is not comparable to
+the §4 accuracy table. **AUC is the comparable quantity**, and it barely moves:
+
+| run | AUC — fp32, full test (n=9,329) | AUC — int8, subset (n=2,000) | acc — int8 subset, fp32 threshold |
+|---|---|---|---|
+| E1 | 0.981 | 0.976 | 0.879 |
+| E2 | 0.983 | 0.978 | 0.887 |
+| E3 | 0.944 | 0.949 | 0.876 |
+| E4 | 0.984 | 0.975 | 0.878 |
+
+Ranking quality survives dynamic quantization: −0.005 for the Whisper runs and
++0.005 for TinyMelNet (within subset noise). What quantization does move is
+**calibration**, and the threshold does not travel with it: the E2 int8 model
+scores 0.947 on the 225 Hinglish clips at threshold 0.63, against 0.951 for
+fp32 — close, but the two artifacts are not producing identical probabilities.
+
+**Recommendation: recalibrate the threshold per exported artifact.** Tune on the
+validation split against the exact `.onnx` you intend to serve rather than
+inheriting the fp32 number. The per-run thresholds already vary widely between
+otherwise-identical models (E1 0.35, E2 0.63, E3 0.53, E4 0.35), which shows the
+operating point is a property of the trained artifact and not a constant of the
+task. `tools/error_analysis.py --run <dir> --threshold <t>` sweeps and plots it.
+
+## 8. Limitations and future work
+
+- **The Hinglish evaluation is entirely TTS-synthetic.** Every number in §5.1,
+  §5.2 and §5.3 comes from edge-tts audio. There are no real human code-switched
+  recordings in this evaluation, and synthetic speech has cleaner boundaries,
+  more regular prosody, and no background noise, backchannels or overlapping
+  talk. The +32 point improvement is real on this benchmark; whether it transfers
+  at full magnitude to real Hinglish speakers is unverified. The most valuable
+  next step is a few hundred real recordings, even unbalanced ones, as a check
+  set. The `human_audio` slice (n=5,367, 0.946 → 0.947) shows no synthetic-speech
+  shortcut developing, which is reassuring but is an English/Hindi measurement,
+  not a Hinglish one.
+- **Four TTS voices**, two Hindi and two Indian-English. Accent, age, gender and
+  recording-condition diversity are all far below what a production system meets,
+  and a model can overfit to a specific voice's end-of-utterance prosody in ways
+  this test set cannot detect.
+- **89 templates over a narrow domain.** The corpus covers everyday Indian
+  service-app scenarios. Template-level splitting prevents wording leakage but
+  cannot create genuine domain diversity; performance on, say, medical or legal
+  Hinglish is unmeasured.
+- **Laptop latency.** §6 numbers vary ~35% between sessions on the same machine
+  and have not been measured on server hardware, under concurrent load, or at
+  p99 — which is what a real-time budget is actually set by.
+- **Single seed (42), one run per configuration.** No error bars. The E2/E4
+  static-metric gaps (0.013 on n=225, 0.001 on n=9,329) are well inside what seed
+  variance would plausibly produce — which is exactly why §5.3 rests on the
+  stress test and not on those gaps.
+- **The stress test uses digital silence**, i.e. exact zeros. Real pauses contain
+  room tone, breath and mic self-noise. Zeros are the cleanest probe of the
+  correlation under test, but a room-tone version would be a stronger claim, and
+  E2's `noise_p=0.25` augmentation only partially covers it.
+- **Dataset licensing.** pipecat smart-turn-data v3.2 aggregates several upstream
+  corpora under their own licenses. The per-source terms on the dataset card
+  govern any redistribution or commercial use of models trained on it — a genuine
+  constraint on shipping the weights, not a formality.
+- **Not yet measured:** streaming behaviour under repeated calls as silence grows
+  (the demo simulates it, but it is not quantified); interaction with a specific
+  VAD's firing policy; and the accuracy/latency curve for E3 trained to actual
+  convergence rather than 8 epochs.
+
+## 9. Reproduction
+
+Everything below runs from the repo root with `.venv/Scripts/python.exe`
+(Python 3.12; `uv sync` builds the environment).
+
+| step | command | output |
+|---|---|---|
+| tests (31, ~24 s) | `python -m pytest -q` | feature parity vs HF, augmentation, sampler, metrics, notebook invariants, train smoke |
+| Hinglish corpus plan | `python -m synth.corpus` | `synth/output/corpus_plan.jsonl` |
+| Hinglish TTS render | `python -m synth.tts_generate` | `synth/output/audio/`, `boundaries/`, `manifest.jsonl` |
+| package + split | `python -m synth.package_kaggle` | `manifest.parquet` (template-level split), `hinglish-synth.zip` |
+| data prep + training | see **`KAGGLE_RUNBOOK.md`** | `experiments/run_<exp>/` |
+| aggregate tables | `python -m tools.aggregate_results` | `experiments/RESULTS.md` |
+| error analysis | `python -m tools.error_analysis --run experiments/run_e2_hinglish_aug` | `analysis/worst_errors.md`, `prob_curves.png`, `threshold_sweep.png` |
+| build HF Space | `python -m tools.build_space` | `space/` (torch-free, deployable) |
+| local demo | `python demo/app.py` | Gradio UI on localhost |
+
+`KAGGLE_RUNBOOK.md` covers the two Kaggle notebooks (`01_data_prep`, `02_train`),
+which are **generated from the tested library** by
+`python -m tools.build_notebooks` — the notebook and `src/turn_detector/` never
+drift, and `tests/test_notebooks.py` enforces it. It also documents the
+`push_kaggle` CLI (`prep` / `train <exp>` / `status` / `pull` / `--resume`), the
+10.5 h time budget that keeps a killed 12 h session recoverable, and the
+config-hash check that makes a mismatched resume fail loudly instead of silently
+restarting from step 0.
+
+The silence stress test in §5.3 is recorded in
+`experiments/silence_stress_test.json`. To re-derive it: load the 225 rows of
+`synth/output/manifest.parquet` where `split == "test"`, score each clip with
+`TurnDetector(run/model_int8.onnx, threshold=<that run's threshold>)`, re-score
+with 0.5 s and 1.0 s of zeros appended, and count the decisions that change and,
+among those, the ones going incomplete → complete.
+
+Per-run configs and full metrics live in `experiments/run_*/metrics.json`;
+`src/turn_detector/config.py` is the single source of truth for E1–E4.
