@@ -29,8 +29,17 @@ PREP_MD = """\
 **Kaggle settings:** CPU (no GPU needed) · **Internet ON** · takes ~2-3 h.
 
 Streams `pipecat-ai/smart-turn-data-v3.2-train` (41 GB) and `-test`, resamples
-to 16 kHz mono, keeps the last 8 s, writes FLAC + `manifest.parquet` to
-`/kaggle/working/prep`.
+to 16 kHz mono, keeps the last 8 s, and writes FLAC into 64 **ZIP shards**
+(`/kaggle/working/prep/shards/shard_NN.zip`) next to `manifest.parquet`.
+
+**Why shards:** Kaggle's kernel-output publishing silently fails past roughly
+100k files — the version completes, but its output is an 845-byte empty
+`_output_.zip`. The earlier 56k-clip prep published fine; this one keeps ~122k,
+so the clips ride inside stored (uncompressed — FLAC already is) zips. Each
+entry's arcname is exactly the `path` the manifest records
+(`audio/<2-hex>/<id>.flac`), so notebook 02 extracts the shards to
+`/tmp/prep_audio` and uses that as the audio root, unchanged from the old
+loose-file layout.
 
 **Composition** (this is the E6 "full data" prep, a superset of the E1-E4 one):
 
@@ -59,7 +68,9 @@ Dataset from this notebook's output named **`smart-turn-enhi-prep`**
 **Interrupted?** A committed batch run starts from an empty `/kaggle/working`,
 so there is nothing to resume from — just *Save & Run All* again. Prep normally
 finishes well inside a single session. (The resume bookkeeping in the code only
-helps when you re-run cells inside one live interactive session.)
+helps when you re-run cells inside one live interactive session — and a shard
+whose writer was killed outright loses its central directory, which the final
+cell's `entries >= manifest rows` assert catches. Re-run clean if it trips.)
 """
 
 # datasets >= 4 routes Audio decoding through torchcodec (extra FFmpeg deps);
@@ -67,7 +78,7 @@ helps when you re-run cells inside one live interactive session.)
 PREP_PIP = '%pip install -q "datasets>=3.6,<4" soundfile polars'
 
 PREP_MAIN = r'''
-import hashlib, json, time
+import hashlib, io, json, time, zipfile
 from pathlib import Path
 
 import numpy as np
@@ -76,8 +87,8 @@ import soundfile as sf
 from datasets import Audio, load_dataset
 
 OUT = Path("/kaggle/working/prep")
-AUDIO_DIR = OUT / "audio"
-AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+SHARD_DIR = OUT / "shards"
+SHARD_DIR.mkdir(parents=True, exist_ok=True)
 MANIFEST = OUT / "manifest.jsonl"
 
 SR = 16000
@@ -85,6 +96,12 @@ MAX_SECONDS = 8.0
 EN_TRAIN_CAP_PER_LABEL = 33000   # english train rows per label (~all of them)
 OTHER_CAP_PER_LANG_LABEL = 850   # non-EN/HI train rows per (language, label)
 VAL_PCT = 5                      # % of train-source rows held out as val
+# Audio goes into 64 ZIPs rather than loose files: Kaggle's kernel-output
+# publishing silently fails somewhere past ~100k files -- the version "succeeds"
+# with an 845-byte empty _output_.zip and no error. The 56k-clip prep published
+# fine; this one keeps ~122k, so the clips ride in shard zips and notebook 02
+# extracts them to /tmp before training.
+SHARDS = 64
 
 # smart-turn v3.2 tags language with ISO-639-3 codes; the manifest (and every
 # downstream consumer) uses the long names for the two languages we report on,
@@ -119,6 +136,29 @@ print(f"resuming with {len(done_ids)} rows, counts={counts}")
 
 mf = open(MANIFEST, "a")
 
+# ---- shard zips: 64 open handles, opened lazily, closed in the finally ----
+zips = {}
+
+def shard_of(rid):
+    # md5 rather than rid[:2] straight: ids are uuid strings today, but hashing
+    # keeps the split uniform (and defined) whatever an id happens to look like.
+    return int(hashlib.md5(rid.encode()).hexdigest()[:2], 16) % SHARDS
+
+def shard_zip(i):
+    zf = zips.get(i)
+    if zf is None:
+        # mode "a" creates the shard, and on a re-run inside a live session
+        # appends to the existing one. Caveat: ZipFile writes the central
+        # directory at close(), so a hard kill leaves the last-touched shards
+        # without one -- "a" then starts a fresh archive at the end of the file
+        # and the earlier entries stop being listed. The finalize cell's
+        # "entries >= manifest rows" assert is what catches that; the fix is a
+        # clean re-run, not a resume.
+        zf = zipfile.ZipFile(SHARD_DIR / f"shard_{i:02d}.zip", mode="a",
+                             compression=zipfile.ZIP_STORED)  # FLAC: already compressed
+        zips[i] = zf
+    return zf
+
 def process(row, src):
     # a null language tag would otherwise write "language": null into the
     # manifest and break every downstream string mask
@@ -146,9 +186,12 @@ def process(row, src):
     wav = wav[-int(MAX_SECONDS * SR):]
     if len(wav) < int(0.3 * SR):
         return 0
-    sub = AUDIO_DIR / rid[:2]
-    sub.mkdir(exist_ok=True)
-    sf.write(sub / f"{rid}.flac", wav, SR, subtype="PCM_16")
+    # arcname == the manifest's "path", so extracting a shard reproduces the
+    # exact audio/<2-hex>/<id>.flac tree the loose-file version wrote
+    arcname = f"audio/{rid[:2]}/{rid}.flac"
+    buf = io.BytesIO()
+    sf.write(buf, wav, SR, format="FLAC", subtype="PCM_16")
+    shard_zip(shard_of(rid)).writestr(arcname, buf.getvalue())
     if src == "test":
         split = "test"
     elif not core:
@@ -158,7 +201,7 @@ def process(row, src):
     else:
         split = "val" if int(hashlib.md5(rid.encode()).hexdigest(), 16) % 100 < VAL_PCT else "train"
     rec = {
-        "id": rid, "path": f"audio/{rid[:2]}/{rid}.flac", "label": label,
+        "id": rid, "path": arcname, "label": label,
         "language": lang,
         "midfiller": None if row["midfiller"] is None else bool(row["midfiller"]),
         "endfiller": None if row["endfiller"] is None else bool(row["endfiller"]),
@@ -171,27 +214,34 @@ def process(row, src):
     counts[(lang, label, src)] = counts.get((lang, label, src), 0) + 1
     return 1
 
-for src, name in [("train", "pipecat-ai/smart-turn-data-v3.2-train"),
-                  ("test", "pipecat-ai/smart-turn-data-v3.2-test")]:
-    dd = load_dataset(name, streaming=True)
-    split_name = "train" if "train" in dd else list(dd.keys())[0]
-    ds = dd[split_name].cast_column("audio", Audio(sampling_rate=SR))
-    t0, n_scanned, n_kept = time.time(), 0, 0
-    for row in ds:
-        n_scanned += 1
-        n_kept += process(row, src)
-        if n_scanned % 5000 == 0:
-            mf.flush()
-            print(f"[{src}] scanned {n_scanned} kept {n_kept} "
-                  f"({(time.time()-t0)/60:.1f} min)", flush=True)
-    mf.flush()
-    print(f"[{src}] DONE: scanned {n_scanned}, kept {n_kept}")
-
-mf.close()
+try:
+    for src, name in [("train", "pipecat-ai/smart-turn-data-v3.2-train"),
+                      ("test", "pipecat-ai/smart-turn-data-v3.2-test")]:
+        dd = load_dataset(name, streaming=True)
+        split_name = "train" if "train" in dd else list(dd.keys())[0]
+        ds = dd[split_name].cast_column("audio", Audio(sampling_rate=SR))
+        t0, n_scanned, n_kept = time.time(), 0, 0
+        for row in ds:
+            n_scanned += 1
+            n_kept += process(row, src)
+            if n_scanned % 5000 == 0:
+                mf.flush()
+                print(f"[{src}] scanned {n_scanned} kept {n_kept} "
+                      f"({(time.time()-t0)/60:.1f} min, {len(zips)} shards open)",
+                      flush=True)
+        mf.flush()
+        print(f"[{src}] DONE: scanned {n_scanned}, kept {n_kept}")
+finally:
+    mf.close()
+    # closing is what writes each shard's central directory -- without it the
+    # zips are unreadable, so this must happen even when the stream blows up
+    for zf in zips.values():
+        zf.close()
+    print(f"closed {len(zips)} shard zips")
 '''
 
 PREP_FINALIZE = r'''
-import json
+import json, zipfile
 import polars as pl
 from pathlib import Path
 
@@ -218,7 +268,26 @@ print(df.group_by("split").agg(
     pl.col("midfiller").mean().alias("midfiller_rate"),
     pl.col("synthetic").mean().alias("synthetic_rate"),
 ))
-import shutil
+# ---- shard check: every zip must open, and together hold every manifest row.
+# testzip() re-CRCs ~15 GB (far too slow); opening the archive already validates
+# the central directory, which is the failure mode a killed run actually causes.
+shards = sorted((OUT / "shards").glob("shard_*.zip"))
+entries, sizes = 0, []
+for p in shards:
+    with zipfile.ZipFile(p) as zf:
+        n = len(zf.namelist())
+    entries += n
+    sizes.append((p.stat().st_size / 1e9, n))
+gb = sorted(s for s, _ in sizes)
+print(f"\n{len(shards)} shards, {entries} entries, {sum(gb):.1f} GB")
+if shards:
+    print(f"per-shard GB: min {gb[0]:.2f} / median {gb[len(gb)//2]:.2f} / max {gb[-1]:.2f}"
+          f"  |  entries: min {min(n for _, n in sizes)} / max {max(n for _, n in sizes)}")
+# >= not ==: a crash-and-resume can leave a duplicate arcname for the clip that
+# was mid-write, and extraction just keeps the last copy. Fewer entries than
+# rows means audio is genuinely missing -> re-run prep, do not train on it.
+assert entries >= df.height, f"{entries} shard entries < {df.height} manifest rows"
+
 total_gb = sum(f.stat().st_size for f in OUT.rglob("*")) / 1e9
 print(f"output size: {total_gb:.1f} GB (expect ~16-17 GB; must stay under ~19.6 GB)")
 if total_gb > 19.0:
@@ -383,7 +452,31 @@ if getattr(cfg, "kd_teacher", ""):
                                 marker="ckpt_best.pt")
     print(f"teacher ({cfg.kd_teacher}): {teacher_dir}")
 
-real = [(f"{PREP}/manifest.parquet", PREP)]
+# Prep ships its ~122k clips as ZIP shards next to manifest.parquet -- >100k
+# loose files silently breaks Kaggle's kernel-output publishing. Extract them
+# once to /tmp; the arcnames already carry the audio/<2-hex>/<id>.flac tree the
+# manifest records, so the extraction root is a drop-in audio root. No shards/
+# dir means a legacy loose-file prep, which is still read straight from PREP.
+import time, zipfile
+
+shards = sorted(Path(PREP, "shards").glob("shard_*.zip"))
+if shards:
+    PREP_AUDIO = "/tmp/prep_audio"
+    Path(PREP_AUDIO).mkdir(parents=True, exist_ok=True)
+    t0, n_files = time.time(), 0
+    for i, sp in enumerate(shards, 1):
+        with zipfile.ZipFile(sp) as zf:
+            zf.extractall(PREP_AUDIO)
+            n_files += len(zf.namelist())
+        print(f"  [{i}/{len(shards)}] {sp.name}: {n_files} clips so far "
+              f"({time.time() - t0:.0f}s)", flush=True)
+    print(f"extracted {n_files} clips from {len(shards)} shards -> {PREP_AUDIO} "
+          f"in {(time.time() - t0) / 60:.1f} min")
+else:
+    PREP_AUDIO = PREP
+    print(f"no shards/ under {PREP} — reading loose audio from the mount")
+
+real = [(f"{PREP}/manifest.parquet", PREP_AUDIO)]
 synth = [(f"{HINGLISH}/manifest.parquet", HINGLISH)]
 train_sources = real + (synth if cfg.use_hinglish_synth else [])
 sources = {

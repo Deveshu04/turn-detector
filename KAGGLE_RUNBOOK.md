@@ -48,6 +48,14 @@ level. If they end up nested one level deeper, adjust `HINGLISH` in
 kernel's latest output directly via `kernel_sources`, so **no dataset needs to be
 created from it**.
 
+Prep writes its ~122k clips into 64 ZIP shards (`prep/shards/shard_NN.zip`)
+rather than loose files, because Kaggle's kernel-output publishing silently
+fails past ~100k files (the version "succeeds" with an 845-byte empty
+`_output_.zip`); the train notebook extracts the shards to `/tmp/prep_audio`
+and uses that as the audio root, while `manifest.parquet` still comes from the
+mount. The final prep cell prints the shard/entry counts and asserts every
+manifest row has a shard entry.
+
 If the prep run is interrupted, just push it again. A committed batch run starts
 from an empty `/kaggle/working`, so there is nothing to resume from — prep
 normally completes inside a single session.
