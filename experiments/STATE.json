@@ -4,17 +4,17 @@
     "phase0_scaffold": "done",
     "phase1a_hinglish_synth": "done — 2515 clips / 2.1h in synth/output/hinglish-synth.zip, awaiting Kaggle upload",
     "phase1b_core_lib_notebooks": "done — review fixes applied (eng/hin codes, template split v2, time-budget resume); hinglish-synth re-versioned; prep kernel v3 running",
-    "phase2_kaggle_training": "done — all E1-E4 complete",
+    "phase2_kaggle_training": "done — all E1-E6 complete; E1-E4 on the 46,908-row prep, E5/E6 on the expanded 111,509-row prep",
     "phase3_analysis": "done — REPORT.md, RESULTS.md, stress test",
-    "phase4_ship": "in_progress — awaiting HF login + GitHub remote from user; E5 (distillation) + E6 (full multilingual prep) extension in flight, README points at RESULTS.md for their final tables"
+    "phase4_ship": "in_progress — docs final (REPORT §5.5/§5.6 + §7 calibration, README, MODEL_CARD, RESULTS all carry E5/E6), awaiting HF/GitHub creds"
   },
   "experiments": {
     "e1_baseline": {"status": "done", "notes": "acc 93.0% overall / 93.8 EN / 93.2 HI / 63.1 hinglish (AUC .61 — the gap E2 targets); 9.6 min on T4; int8 8.5MB"},
     "e2_hinglish_aug": {"status": "done", "notes": "shipped model: 95.1 hinglish / 93.8 overall, zero regression on EN/HI/human_audio; threshold 0.63; 10.6 min"},
     "e3_tinymel_scratch": {"status": "done", "notes": "87.1 overall at 507k params / 1.28MB int8 — 6.7 pts behind E2, the gap E5 distillation targets"},
     "e4_no_pause_aug": {"status": "done", "notes": "ablation: best static hinglish (96.4) but 28.9% of decisions flip after +1.0s silence vs 8.4% for E2 — why pause aug ships"},
-    "e5_distill": {"status": "pending", "notes": "TinyMelNet student distilled from the E2 (or E6) whisper teacher: alpha 0.3, T 2.0, e3 recipe; needs turn-detect-ckpt staged with the teacher's ckpt_best"},
-    "e6_full_data": {"status": "pending", "notes": "E2 recipe on the expanded prep (EN uncapped + 850/lang/label multilingual tail, train-only); needs prep kernel re-run first"}
+    "e5_distill": {"status": "done", "notes": "SHIPPED fast model (models/model_tinymel_int8.onnx, demo 'fast'): 89.6 overall / 0.959 AUC at 507k params vs E3's 87.1/0.944 — +2.5 pts at identical size, +3.0 EN; hinglish acc flat 87.1 but AUC 0.949->0.962; int8 1.28MB acc 0.9045; threshold 0.57; 32.1 min; teacher = E2 (not E6) because hinglish is the target domain"},
+    "e6_full_data": {"status": "done", "notes": "data-scaling study, NOT shipped: 111,509 rows (EN uncapped ~62k + all HI + 21 langs @850/lang/label + hinglish synth) gives 94.3 overall / 0.986 AUC, 94.5 EN, 95.4 human_audio — but hinglish 93.8/0.963 vs E2's 95.1/0.986. Scaling 2.4x dilutes the synth hinglish share 4.6%->1.9% and degrades the target domain; E2 stays the headline. Needed 64 zip shards (Kaggle output publishing fails >~100k loose files)"}
   },
   "kaggle_assets": {
     "hinglish_synth_dataset": null,

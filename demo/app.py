@@ -49,10 +49,13 @@ def find_model(filename: str) -> Path | None:
 
 
 def tuned_threshold(metrics_path: Path) -> float:
-    """Threshold tuned on the validation split during that run; 0.5 if unknown."""
+    """Deployment threshold: the int8 decision-matched value when present
+    (quantization shifts the operating point), else the fp32-tuned one."""
     if metrics_path.exists():
         try:
-            return round(float(json.loads(metrics_path.read_text())["threshold"]), 2)
+            m = json.loads(metrics_path.read_text())
+            return round(float(
+                m.get("int8_threshold_decision_matched", m["threshold"])), 2)
         except (KeyError, ValueError, json.JSONDecodeError):
             pass
     return 0.5

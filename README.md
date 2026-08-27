@@ -11,8 +11,10 @@ on held-out Hinglish (n=225)** and gets *complete* Hinglish sentences wrong 84%
 of the time (n=75); adding 2,157 synthetic code-switched training clips takes that to
 **95.1% (+32.0 points)** with **zero regression** on English (0.938 → 0.938,
 n=7,820), Hindi (0.931 → 0.932, n=1,284) or the real-human slice (0.946 →
-0.947, n=5,367). The shipped model is an **8.5 MB int8 ONNX** that runs on CPU
-with numpy and onnxruntime — no torch, no transformers.
+0.947, n=5,367). Two artifacts ship, both int8 ONNX running on CPU with numpy
+and onnxruntime — no torch, no transformers: the **accurate** 8.5 MB model
+(93.8% overall / 95.1% Hinglish) and a **fast** 1.3 MB / ~14 ms distilled
+student at 89.6% overall, 507k parameters. The demo exposes both in a dropdown.
 
 The result worth reading twice is the ablation. Dropping pause augmentation
 produces a model that is *better* on every static table (96.4% Hinglish vs
@@ -26,32 +28,37 @@ production users feel it immediately. Full write-up in
 Accuracy at each run's tuned threshold, fp32, on the official
 smart-turn v3.2 test split plus a template-disjoint synthetic Hinglish split.
 
-| slice | n | E1 baseline | **E2 shipped** | E3 tiny-from-scratch |
-|---|---:|---|---|---|
-| overall | 9,329 | 0.930 | **0.938** | 0.871 |
-| english | 7,820 | 0.938 | **0.938** | 0.868 |
-| hindi | 1,284 | 0.931 | **0.932** | 0.884 |
-| **hinglish** | 225 | 0.631 | **0.951** | 0.871 |
-| filler | 2,381 | 0.912 | **0.914** | 0.856 |
-| human_audio | 5,367 | 0.946 | **0.947** | 0.877 |
-| — AUC, hinglish | 225 | 0.612 | **0.986** | 0.949 |
-| — AUC, overall | 9,329 | 0.981 | **0.983** | 0.944 |
-| params | | 7,885,953 | 7,885,953 | 507,265 |
-| int8 ONNX | | 8.50 MB | 8.50 MB | 1.28 MB |
-| tuned threshold | | 0.35 | **0.63** | 0.53 |
+| slice | n | E1 | **E2 shipped** | E3 | **E5 shipped fast** | E6 |
+|---|---:|---|---|---|---|---|
+| overall | 9,329 | 0.930 | **0.938** | 0.871 | 0.896 | 0.943 |
+| english | 7,820 | 0.938 | **0.938** | 0.868 | 0.898 | 0.945 |
+| hindi | 1,284 | 0.931 | **0.932** | 0.884 | 0.885 | 0.931 |
+| **hinglish** | 225 | 0.631 | **0.951** | 0.871 | 0.871 | 0.938 |
+| filler | 2,381 | 0.912 | **0.914** | 0.856 | 0.870 | 0.915 |
+| human_audio | 5,367 | 0.946 | **0.947** | 0.877 | 0.904 | 0.954 |
+| — AUC, hinglish | 225 | 0.612 | **0.986** | 0.949 | 0.962 | 0.963 |
+| — AUC, overall | 9,329 | 0.981 | **0.983** | 0.944 | 0.959 | 0.986 |
+| params | | 7,885,953 | 7,885,953 | 507,265 | 507,265 | 7,885,953 |
+| int8 ONNX | | 8.50 MB | 8.50 MB | 1.28 MB | 1.28 MB | 8.50 MB |
+| tuned threshold (fp32) | | 0.35 | **0.63** | 0.53 | 0.57 | 0.54 |
 
 - **E1** `e1_baseline` — real English + Hindi only, no augmentation.
-- **E2** `e2_hinglish_aug` — E1 data + synthetic Hinglish + pause/silence/noise/speed augmentation. **This is the shipped model.**
-- **E3** `e3_tinymel_scratch` — same data as E2, 507k-param from-scratch mel-CNN + BiGRU.
+- **E2** `e2_hinglish_aug` — E1 data + synthetic Hinglish + pause/silence/noise/speed augmentation. **Shipped: `models/model_int8.onnx`.**
+- **E3** `e3_tinymel_scratch` — same data as E2, 507k-param from-scratch mel-CNN + BiGRU. Superseded by E5.
 - **E4** `e4_no_pause_aug` — E2 minus pause augmentation; see below.
+- **E5** `e5_distill` — E3's architecture distilled from E2's frozen checkpoint (α 0.3, T 2.0). **+2.5 points over E3 at identical size. Shipped: `models/model_tinymel_int8.onnx`.**
+- **E6** `e6_full_data` — E2's recipe on 111,509 rows (2.4×: English uncapped, 21-language tail).
 
 Full tables including E4: [`experiments/RESULTS.md`](experiments/RESULTS.md).
 
-Two follow-ups are in flight and are **not** in the table above: **E5**
-(`e5_distill`, TinyMelNet distilled from the E2 teacher — closing E3's 6.7-point
-gap at 507k params) and **E6** (`e6_full_data`, the E2 recipe on an expanded prep
-that keeps all English plus a per-language multilingual tail). Whatever they
-score, `experiments/RESULTS.md` carries the final tables for every run.
+**Why E6 is not shipped, despite winning on paper.** It beats E2 overall (0.943
+vs 0.938), on English (0.945 vs 0.938) and on the real-human slice (0.954 vs
+0.947, AUC 0.990) — and **loses on Hinglish** (0.938 vs 0.951, AUC 0.963 vs
+0.986). The synthetic Hinglish corpus did not grow with the rest of the data, so
+its share of training fell from 4.6% to 1.9% and its influence was diluted out:
+scaling 2.4× improved the general case and degraded the target domain. Hinglish
+is the brief, so E2 stays — and is also why E2, not E6, is E5's distillation
+teacher. Details in [`experiments/REPORT.md`](experiments/REPORT.md) §5.5–5.6.
 
 ### Silence stress test — why static accuracy is not enough
 
@@ -82,7 +89,7 @@ Source: [`experiments/silence_stress_test.json`](experiments/silence_stress_test
 # install (Python 3.12)
 uv sync
 
-# tests — 35 of them, ~30 s
+# tests — 39 of them, ~1 min (add -m "not slow" to skip the ONNX export smoke)
 uv run python -m pytest -q
 
 # Gradio demo on localhost: record or upload a clip, watch the streaming
@@ -96,20 +103,35 @@ Inference from Python needs only numpy and onnxruntime:
 import numpy as np, soundfile as sf
 from turn_detector.infer import TurnDetector
 
-detector = TurnDetector("models/model_int8.onnx", threshold=0.63)
+detector = TurnDetector("models/model_int8.onnx", threshold=0.50)   # int8: 0.50
 wav, sr = sf.read("demo/examples/incomplete_trailing_aur.flac")  # 16 kHz mono
 print(detector.predict(np.asarray(wav, dtype=np.float32)))
 # {'prob_complete': ..., 'is_complete': False, 'mel_ms': ..., 'model_ms': ..., 'total_ms': ...}
+
+# the fast variant carries its own threshold
+fast = TurnDetector("models/model_tinymel_int8.onnx", threshold=0.57)
 ```
 
-Latency, int8 ONNX on the dev laptop (onnxruntime CPU, p50 over 100 iterations,
-includes numpy mel extraction): **E2 ≈ 91 ms** single-thread, **E3 ≈ 14 ms**.
-These are laptop numbers and vary ~35% between sessions with thermal state;
-server CPUs are several times faster — pipecat's smart-turn v3 reports ~12 ms
-for the same encoder class. See [`experiments/REPORT.md`](experiments/REPORT.md) §6.
+**Thresholds are per artifact, and quantization moves them.** E2's fp32 operating
+point is 0.63, but int8 shifts the probabilities: **0.50 on the int8 file
+reproduces the fp32-at-0.63 decision on 99.7% of 600 held-in synthetic clips**
+(no test labels used). That resolves an apparent int8 accuracy drop as a
+calibration artifact rather than lost separability — int8 AUC 0.978 vs fp32
+0.983. `models/metrics.json` records it as `int8_threshold_decision_matched`;
+the demo and Space default to it, and to 0.57 for the distilled model.
 
-Training runs on Kaggle (free T4, ~10–16 min per experiment) — see
-[`KAGGLE_RUNBOOK.md`](KAGGLE_RUNBOOK.md).
+Latency, int8 ONNX on the dev laptop (onnxruntime CPU, p50 over 100 iterations,
+includes numpy mel extraction): **E2 ≈ 91 ms** single-thread, **E5 ≈ 14 ms**
+(same architecture and footprint as E3). These are laptop numbers and vary ~35%
+between sessions with thermal state — an earlier session measured the small model
+at 19 ms; server CPUs are several times faster, and pipecat's smart-turn v3
+reports ~12 ms for the same encoder class. See
+[`experiments/REPORT.md`](experiments/REPORT.md) §6.
+
+Training runs on Kaggle (free T4, ~10–32 min per experiment) — see
+[`KAGGLE_RUNBOOK.md`](KAGGLE_RUNBOOK.md). The expanded E5/E6 prep ships its audio
+as 64 ZIP shards because Kaggle's kernel-output publishing silently fails past
+~100k loose files; the runbook documents the failure mode and the fix.
 
 ## Repo map
 
@@ -145,10 +167,11 @@ tools/
   build_space.py       assembles a deployable torch-free HF Space at space/
 notebooks/kaggle/      01_data_prep.ipynb, 02_train.ipynb (generated)
 experiments/           REPORT.md, RESULTS.md, silence_stress_test.json, run_*/
-models/                shipped E2 artifacts (fp32 + int8 ONNX, metrics.json)
-demo/                  Gradio app + example clips
+models/                shipped artifacts: E2 fp32+int8 ONNX, E5 distilled int8,
+                       metrics.json (incl. int8_threshold_decision_matched)
+demo/                  Gradio app (accurate/fast dropdown) + example clips
 docs/MODEL_CARD.md     HF model card
-tests/                 35 tests incl. HF feature-extractor parity
+tests/                 39 tests incl. HF feature-extractor parity + KD smoke
 ```
 
 ## Links
@@ -156,7 +179,8 @@ tests/                 35 tests incl. HF feature-extractor parity
 - **HF Space (demo):** TODO — deploy with `python -m tools.build_space` then
   `hf upload <user>/<space> space/ . --repo-type=space`
 - **HF Hub (model):** TODO — upload `models/model_int8.onnx`,
-  `models/model_fp32.onnx`, `models/metrics.json` and `docs/MODEL_CARD.md`
+  `models/model_fp32.onnx`, `models/model_tinymel_int8.onnx`,
+  `models/metrics.json`, `models/metrics_tinymel.json` and `docs/MODEL_CARD.md`
 - **Synthetic Hinglish dataset:** TODO — `synth/output/hinglish-synth.zip`
   (2,469 clips / 2.07 h) currently lives as a Kaggle dataset
 - Experimental report: [`experiments/REPORT.md`](experiments/REPORT.md)

@@ -24,7 +24,9 @@ properties matter more than headline accuracy:
 2. **Filler and trailing-conjunction sensitivity.** "*Mumbai mein traffic bahut
    zyada kyunki…*" ends in silence and must still read as incomplete.
 
-Four experiments (E1–E4) isolate what actually buys those properties.
+Six experiments (E1–E6) isolate what actually buys those properties: E1–E4 are
+the core ablations, E6 scales the training data 2.4×, and E5 distills the shipped
+model into a 507k-parameter student.
 
 ## 2. Data preparation
 
@@ -35,7 +37,8 @@ The English and Hindi rows of
 are streamed from the 41 GB train split and the official test split, resampled
 to 16 kHz mono, right-truncated to the last 8 s, and written as FLAC plus a
 `manifest.parquet` (`notebooks/kaggle/01_data_prep.ipynb`, generated from
-`tools/build_notebooks.py`).
+`tools/build_notebooks.py`). The counts below are the **E1–E4 prep**; E5 and E6
+use a larger pass over the same source, described in §2.1a.
 
 | quantity | value |
 |---|---|
@@ -57,6 +60,41 @@ the source distribution's class skew.
 
 The validation split is a 5% hash of the train-source ids; the **test split is
 the dataset's own official test split**, never a resample of train.
+
+### 2.1a Expanded prep — the E5/E6 superset
+
+E5 and E6 run on a second, larger pass over the same source (same notebook, wider
+caps). English is effectively uncapped (33,000/label, which keeps all of it),
+Hindi is still uncapped, and a **multilingual tail** is added: every other
+language in v3.2, capped at **850 per (language, label)**, train-only.
+
+| quantity | E1–E4 prep | E5/E6 prep |
+|---|---:|---:|
+| train-split rows scanned | 270,946 | 270,946 |
+| real clips kept (train-source) | 47,006 | 113,148 |
+| English train rows | 33,349 | 62,250 |
+| Hindi train rows | 11,402 | 11,402 |
+| other languages (21, train-only) | 0 | 35,700 |
+| real train rows after 5% val holdout | 44,751 | 109,352 |
+| + synthetic Hinglish train clips | 2,157 | 2,157 |
+| **total train rows** | **46,908** | **111,509** |
+| total clips written | 56,110 (7.0 GB) | 122,252 / 217.6 h (15.5 GB) |
+
+The per-language rows are derived from the prep kernel's split × language × label
+counts; the totals in bold are the values the training run itself printed.
+
+The multilingual tail is **train-only on purpose**: val stays English+Hindi so
+best-checkpoint selection is comparable across all six runs, and the v3.2 test
+split is English+Hindi anyway. `train.py` still reports a `multilingual_other`
+slice, which is `n=0` on the test set by construction — reported rather than
+hidden (§8).
+
+One infrastructure note worth recording: the prep writes its ~122k clips
+into **64 ZIP shards** rather than loose files, because Kaggle's kernel-output
+publishing **silently fails past ~100k files** — the version reports success and
+ships an 845-byte empty `_output_.zip`. The train notebook extracts the shards to
+`/tmp/prep_audio`; `manifest.parquet` still comes from the mount. Documented in
+`KAGGLE_RUNBOOK.md`.
 
 ### 2.2 Synthetic Hinglish pipeline
 
@@ -124,14 +162,14 @@ incomplete class would exceed 55%.
 
 ## 3. Architecture and training
 
-**WhisperTinyTurn** (E1, E2, E4) — the `openai/whisper-tiny` encoder with its
+**WhisperTinyTurn** (E1, E2, E4, E6) — the `openai/whisper-tiny` encoder with its
 positional embedding table sliced from 1500 to **400** positions, which pins the
 input to an 8 s window (128,000 samples → 800 mel frames → 400 encoder positions
 after Whisper's stride-2 conv stem). On top: learned-query attention pooling
 over time, then LayerNorm → Linear(384→256) → GELU → Dropout(0.1) →
 Linear(256→1). **7,885,953 parameters.**
 
-**TinyMelNet** (E3) — a from-scratch control with no pretrained weights: a
+**TinyMelNet** (E3, E5) — a from-scratch control with no pretrained weights: a
 stride-2 Conv1d stem plus three depthwise-separable Conv1d blocks over the mel
 frames, a BiGRU(128), and the same pooling and head. **507,265 parameters.**
 
@@ -146,9 +184,25 @@ which is what lets the Space ship without torch or transformers. Windows are
 **right-aligned**: the last 8 s are kept and shorter clips are left-padded, which
 matches inference, where the decision point is always the present moment.
 
-Training: Kaggle T4, AMP, AdamW, encoder LR 1e-5 / head LR 1e-4 (E3 head 3e-4),
-weight decay 0.01, 5% warmup then cosine decay, grad clip 1.0, batch 64, seed 42.
-E1/E2/E4 run 4 epochs; E3 runs 8 (it is smaller and trains from scratch).
+Training: Kaggle T4, AMP, AdamW, encoder LR 1e-5 / head LR 1e-4 (E3/E5 head
+3e-4), weight decay 0.01, 5% warmup then cosine decay, grad clip 1.0, batch 64,
+seed 42. E1/E2/E4/E6 run 4 epochs; E3/E5 run 8 (TinyMelNet is smaller and trains
+from scratch).
+
+**E5 adds knowledge distillation.** The student is the same 507,265-parameter
+TinyMelNet; the teacher is E2's `ckpt_best.pt`, frozen and in eval mode, scoring
+the *identical augmented* mel batch the student sees — so the soft target already
+accounts for the `pause_cut`/noise/speed edit applied to that clip. The loss
+(`train.py::batch_loss`) is
+
+```
+α · BCE(student_logit, hard_label) + (1 − α) · BCE(student_logit / T, σ(teacher_logit / T))
+```
+
+with **α = 0.3, T = 2.0** — the teacher's soft targets carry 0.7 of the weight
+and the hard labels 0.3. `load_teacher` raises rather than defaulting to `None`
+when `kd_teacher` is set: silently training a "distilled" student against no
+teacher would burn a GPU session and produce a run whose name lies about it.
 
 Sampling is step-based with a **balanced sampler that compensates for label
 flips**: `pause_cut` converts a complete clip into an incomplete one on the fly,
@@ -169,6 +223,11 @@ and then applied unchanged to the test split. It is not re-tuned per slice.
 | E2 `e2_hinglish_aug` | Whisper | yes | 0.15 | 0.50 | 0.25 | 0.25 | 4 | 46,908 | 10.6 |
 | E3 `e3_tinymel_scratch` | TinyMelNet | yes | 0.15 | 0.50 | 0.25 | 0.25 | 8 | 46,908 | 16.1 |
 | E4 `e4_no_pause_aug` | Whisper | yes | — | — | 0.25 | 0.25 | 4 | 46,908 | 12.1 |
+| E5 `e5_distill` † | TinyMelNet | yes | 0.15 | 0.50 | 0.25 | 0.25 | 8 | 111,509 | 32.1 |
+| E6 `e6_full_data` | Whisper | yes | 0.15 | 0.50 | 0.25 | 0.25 | 4 | 111,509 | 21.4 |
+
+† E5 additionally distills from E2's frozen checkpoint (α = 0.3, T = 2.0, §3).
+E5 and E6 both train on the expanded prep of §2.1a — 2.4× the rows of E1–E4.
 
 `pause_cut` truncates a **complete** utterance at a speech-active point in the
 40–85% band of its active span and appends 0.2–1.2 s of silence; the label flips
@@ -178,37 +237,42 @@ ablation that carries Finding 3.
 
 ### Accuracy at the tuned threshold (fp32, official test split)
 
-| slice | n | E1 | E2 | E3 | E4 |
-|---|---:|---|---|---|---|
-| overall | 9,329 | 0.930 | **0.938** | 0.871 | 0.937 |
-| english | 7,820 | 0.938 | **0.938** | 0.868 | 0.937 |
-| hindi | 1,284 | 0.931 | **0.932** | 0.884 | 0.928 |
-| hinglish | 225 | 0.631 | 0.951 | 0.871 | **0.964** |
-| filler | 2,381 | 0.912 | **0.914** | 0.856 | 0.905 |
-| human_audio | 5,367 | 0.946 | **0.947** | 0.877 | 0.946 |
+| slice | n | E1 | E2 | E3 | E4 | E5 | E6 |
+|---|---:|---|---|---|---|---|---|
+| overall | 9,329 | 0.930 | 0.938 | 0.871 | 0.937 | 0.896 | **0.943** |
+| english | 7,820 | 0.938 | 0.938 | 0.868 | 0.937 | 0.898 | **0.945** |
+| hindi | 1,284 | 0.931 | **0.932** | 0.884 | 0.928 | 0.885 | 0.931 |
+| hinglish | 225 | 0.631 | 0.951 | 0.871 | **0.964** | 0.871 | 0.938 |
+| filler | 2,381 | 0.912 | 0.914 | 0.856 | 0.905 | 0.870 | **0.915** |
+| human_audio | 5,367 | 0.946 | 0.947 | 0.877 | 0.946 | 0.904 | **0.954** |
 
 ### AUC (fp32, official test split)
 
-| slice | E1 | E2 | E3 | E4 |
-|---|---|---|---|---|
-| overall | 0.981 | 0.983 | 0.944 | **0.984** |
-| english | **0.984** | 0.983 | 0.941 | 0.983 |
-| hindi | **0.985** | 0.984 | 0.962 | 0.983 |
-| hinglish | 0.612 | 0.986 | 0.949 | **0.993** |
-| filler | **0.971** | 0.971 | 0.940 | 0.970 |
-| human_audio | **0.988** | 0.987 | 0.948 | 0.988 |
+| slice | E1 | E2 | E3 | E4 | E5 | E6 |
+|---|---|---|---|---|---|---|
+| overall | 0.981 | 0.983 | 0.944 | 0.984 | 0.959 | **0.986** |
+| english | 0.984 | 0.983 | 0.941 | 0.983 | 0.960 | **0.987** |
+| hindi | **0.985** | 0.984 | 0.962 | 0.983 | 0.960 | **0.985** |
+| hinglish | 0.612 | 0.986 | 0.949 | **0.993** | 0.962 | 0.963 |
+| filler | 0.971 | 0.971 | 0.940 | 0.970 | 0.947 | **0.977** |
+| human_audio | 0.988 | 0.987 | 0.948 | 0.988 | 0.964 | **0.990** |
+
+`multilingual_other` is `n=0` on this test split for every run (§2.1a), so it is
+omitted here.
 
 ### Footprint and threshold
 
-| | E1 | E2 | E3 | E4 |
-|---|---|---|---|---|
-| params | 7,885,953 | 7,885,953 | 507,265 | 7,885,953 |
-| fp32 ONNX | 31.58 MB | 31.58 MB | 2.03 MB | 31.58 MB |
-| int8 ONNX | 8.50 MB | 8.50 MB | 1.28 MB | 8.50 MB |
-| best val AUC | 0.986 | 0.984 | 0.947 | 0.984 |
-| tuned threshold | 0.35 | **0.63** | 0.53 | 0.35 |
+| | E1 | E2 | E3 | E4 | E5 | E6 |
+|---|---|---|---|---|---|---|
+| params | 7,885,953 | 7,885,953 | 507,265 | 7,885,953 | 507,265 | 7,885,953 |
+| fp32 ONNX | 31.58 MB | 31.58 MB | 2.03 MB | 31.58 MB | 2.03 MB | 31.58 MB |
+| int8 ONNX | 8.50 MB | 8.50 MB | 1.28 MB | 8.50 MB | 1.28 MB | 8.50 MB |
+| best val AUC | 0.986 | 0.984 | 0.947 | 0.984 | 0.963 | 0.985 |
+| tuned threshold | 0.35 | **0.63** | 0.53 | 0.35 | **0.57** | 0.54 |
 
-E2 is the shipped model (`models/`).
+**E2 remains the shipped headline model** (`models/model_int8.onnx`) — E6 beats
+it everywhere except the target domain (§5.5). **E5 is the shipped fast model**
+(`models/model_tinymel_int8.onnx`), replacing E3 (§5.6).
 
 ## 5. Findings
 
@@ -345,7 +409,7 @@ labels.
 recording's natural amount of trailing silence, which is short and — critically —
 correlated with the label in the same way the training data is. A model that has
 learned "silence ⇒ done" is *rewarded* by that test set: it scores 0.964 on
-Hinglish, the best of the four runs. The bias is invisible because the test
+Hinglish, the best of all six runs. The bias is invisible because the test
 distribution shares it. Only an intervention that breaks the correlation — hold
 the content fixed, vary the silence — separates the two models, and it separates
 them by a factor of nearly nine on the metric that actually matters.
@@ -373,7 +437,103 @@ Its validation AUC was still climbing at the end of 8 epochs (0.9465 → 0.9467
 over the last epoch, up from 0.887 after the first), so this is a floor rather
 than a converged ceiling. The honest reading: Whisper's pretrained multilingual
 representation is worth roughly 6.7 accuracy points here, and the small model is
-a real option when the parameter budget is the binding constraint (§6).
+a real option when the parameter budget is the binding constraint (§6). E5 closes
+most of that gap without changing the architecture (§5.6).
+
+### 5.5 Scaling the data 2.4× helps everywhere except the target domain
+
+E6 is E2's recipe — same architecture, same augmentation, same 4 epochs, same
+seed — on the expanded prep of §2.1a: 111,509 train rows against 46,908, with
+English uncapped and a 21-language tail. It costs twice the GPU time (21.4 min
+vs 10.6) and it works, on the general case:
+
+| slice | n | E2 | E6 | Δ acc | E2 AUC | E6 AUC |
+|---|---:|---|---|---|---|---|
+| overall | 9,329 | 0.938 | **0.943** | +0.5 pts | 0.983 | **0.986** |
+| english | 7,820 | 0.938 | **0.945** | +0.7 pts | 0.983 | **0.987** |
+| human_audio | 5,367 | 0.947 | **0.954** | +0.7 pts | 0.987 | **0.990** |
+| filler | 2,381 | 0.914 | **0.915** | +0.1 pts | 0.971 | **0.977** |
+| hindi | 1,284 | **0.932** | 0.931 | −0.1 pts | 0.984 | **0.985** |
+| **hinglish** | 225 | **0.951** | 0.938 | **−1.3 pts** | **0.986** | 0.963 |
+
+Overall accuracy moves by about 48 clips out of 9,329, English by about 52 out of
+7,820, and the real-human slice — the closest thing here to a production proxy —
+gains 0.7 points with AUC 0.987 → 0.990. Every one of those is a genuine
+improvement, and Hindi holding flat while English rises suggests the multilingual
+tail is not crowding out the languages we report on.
+
+**And the target domain went backwards.** Hinglish accuracy falls 0.951 → 0.938
+(11 errors → 14 out of 225) and Hinglish AUC falls 0.986 → 0.963. On n=225 the
+three extra errors are inside seed noise; the **0.022 AUC drop is the number to
+read**, because AUC is threshold-free. 0.963 is the worst Hinglish ranking of any
+Whisper run trained on synthetic Hinglish (E2 0.986, E4 0.993) — E6 is closer
+here to the 507k-parameter students (E3 0.949, E5 0.962) than to its own
+architecture's other runs.
+
+The mechanism is straightforward and worth stating plainly: **the synthetic
+Hinglish training set did not grow.** It is the same 2,157 clips in both runs, so
+its share of the batch fell from **4.6% to 1.9%**. §5.2's finding was that a 4.6%
+synthetic injection buys +32 points on Hinglish without diluting the real-data
+signal; §5.5 is the same trade seen from the other end — hold the injection fixed,
+grow everything around it, and the injection's influence is diluted away. The
+model got better at the average clip and worse at the clip we built it for.
+
+**Consequence for shipping: E2 stays.** The brief is Hinglish turn detection, so a
+model that is 0.5 points better overall and 1.3 points plus 0.022 AUC worse on
+Hinglish is not an upgrade — it is a different product. E6 is recorded here as a
+data-scaling study, and it points at the obvious next experiment: rerun it with
+the synthetic Hinglish corpus scaled proportionally (roughly 5,300 clips) so the
+4.6% share survives contact with 111k rows. That is a synthesis-cost question,
+not a modelling one.
+
+E6 also has an infrastructure lesson attached, in §2.1a: its prep is where the
+~100k-file Kaggle publishing failure surfaced, and the fix — 64 ZIP shards —
+is what makes the expanded dataset reproducible at all.
+
+### 5.6 Distillation recovers most of the small model's gap at identical size
+
+E5 is TinyMelNet again — the same 507,265 parameters and the same 1.28 MB int8
+artifact as E3 — trained with E2's frozen checkpoint as a teacher (α = 0.3,
+T = 2.0, §3):
+
+| slice | n | E3 | E5 | Δ acc | E3 AUC | E5 AUC |
+|---|---:|---|---|---|---|---|
+| overall | 9,329 | 0.871 | **0.896** | **+2.5 pts** | 0.944 | **0.959** |
+| english | 7,820 | 0.868 | **0.898** | **+3.0 pts** | 0.941 | **0.960** |
+| human_audio | 5,367 | 0.877 | **0.904** | +2.7 pts | 0.948 | **0.964** |
+| filler | 2,381 | 0.856 | **0.870** | +1.4 pts | 0.940 | **0.947** |
+| hindi | 1,284 | 0.884 | **0.885** | +0.1 pts | **0.962** | 0.960 |
+| hinglish | 225 | 0.871 | 0.871 | 0.0 pts | 0.949 | **0.962** |
+
+Best validation AUC goes 0.947 → 0.963, and the int8 export follows: 0.9045
+accuracy / 0.9632 AUC on the 2,000-clip subset against E3's 0.876 / 0.949. The
+gap to the E2 teacher narrows from **6.7 points to 4.2** overall, at 15.5× fewer
+parameters and 1/6.6 the int8 file size.
+
+**Two honest qualifications.** First, E5 also trains on the expanded prep
+(111,509 rows), so the +2.5 points is *distillation and 2.4× data together*, not
+distillation alone. §5.5 shows the extra data is worth roughly +0.5 points
+overall for the Whisper model, so most of E5's gain is plausibly the teacher —
+but separating them needs a third run (E3's recipe on the expanded prep, no
+teacher) that was not budgeted. Second, **Hinglish accuracy did not move**: 0.871
+in both runs, despite a teacher scoring 0.951 there. The AUC did improve
+(0.949 → 0.962), so the student's *ranking* of Hinglish clips got better while its
+thresholded accuracy did not — consistent with §5.5's dilution acting on E5 too
+(same 1.9% synthetic share) and with 507k parameters simply not having the
+capacity to absorb the teacher's Hinglish behaviour.
+
+**Why E2 and not E6 as the teacher.** E6 is the stronger model on paper — better
+overall, better English, better `human_audio`. It is also 0.022 AUC worse on
+Hinglish — and 70% of the student's loss is the teacher's soft targets, so a
+student distilled from E6 would be trained to reproduce precisely the ranking E6
+does worst. Distilling the target-domain specialist rather than the
+general-purpose leader is the choice that follows from the brief; it is the same
+decision as §5.5's, applied one level down. Untested, and worth an hour of T4
+time to check: E6 may still be the better teacher for the non-Hinglish slices.
+
+E5 replaces E3 as the shipped small model (`models/model_tinymel_int8.onnx`, the
+demo's **fast** dropdown entry). E3 remains in the report as the no-teacher
+control that makes E5's number meaningful.
 
 ## 6. Latency and size
 
@@ -384,7 +544,12 @@ CPUExecutionProvider, 8 s window, median over 100 iterations × 3 repeats.
 | model | params | int8 size | total p50, 1 thread | model p50, 1 thread | total p50, 4 threads |
 |---|---:|---:|---:|---:|---:|
 | E2 WhisperTinyTurn | 7,885,953 | 8.50 MB | 91 ms | 83 ms | 59 ms |
-| E3 TinyMelNet | 507,265 | 1.28 MB | 14 ms | 7 ms | 18 ms |
+| E3 / E5 TinyMelNet | 507,265 | 1.28 MB | 14 ms | 7 ms | 18 ms |
+
+E5 and E3 are the **same architecture and the same exported graph shape** — only
+the weights differ — so E5 inherits E3's footprint exactly: 507,265 parameters,
+2.03 MB fp32, 1.28 MB int8, and the same measured latency. The TinyMelNet row is
+reported once for both.
 
 **These are laptop numbers and should be read as a conservative ceiling, not a
 server figure.** Two measurement sessions on the same Windows dev laptop
@@ -401,10 +566,14 @@ The mel frontend costs a fixed ~8 ms in both cases, which is why it dominates
 E3's budget (7 ms model + ~7 ms mel) and is a rounding error in E2's.
 
 **Choosing between them.** E2 at 8.5 MB and tens of milliseconds per call is the
-right default: the accuracy gap to E3 (0.938 vs 0.871 overall, 0.951 vs 0.871
-Hinglish) is large, and turn detection runs once per VAD pause, not per audio
-frame. E3 earns its place when the model must fit on-device alongside ASR and
-TTS, or when the CPU budget is genuinely single-digit milliseconds.
+right default: the accuracy gap to the small model is still real (0.938 vs 0.896
+overall, 0.951 vs 0.871 Hinglish), and turn detection runs once per VAD pause,
+not per audio frame. The small model earns its place when it must fit on-device
+alongside ASR and TTS, or when the CPU budget is genuinely single-digit
+milliseconds — and distillation makes that trade materially cheaper than it was:
+E5 pays 4.2 accuracy points for a 6.6× smaller file and a ~6× faster call, where
+E3 paid 6.7 for the same footprint. Both shipped artifacts sit in `models/` and
+the demo exposes them as **accurate** (E2) and **fast** (E5).
 
 ## 7. int8 quantization
 
@@ -414,13 +583,13 @@ and dynamic batch breaks the bidirectional-GRU reshape on export), then
 `onnxruntime.quantization.quantize_dynamic` with `QuantType.QUInt8` on weights.
 
 fp32 ONNX is checked against torch on every export: max |Δprob| = **1.19e-07**
-for the Whisper models and 3.58e-07 for TinyMelNet, so the graph conversion
-itself is lossless to float precision.
+for all four Whisper runs (E6 included) and 3.58e-07 / 7.75e-07 for TinyMelNet
+(E3 / E5), so the graph conversion itself is lossless to float precision.
 
 | | fp32 ONNX | int8 ONNX | ratio |
 |---|---|---|---|
-| WhisperTinyTurn (E1/E2/E4) | 31.58 MB | 8.50 MB | 3.7× |
-| TinyMelNet (E3) | 2.03 MB | 1.28 MB | 1.6× |
+| WhisperTinyTurn (E1/E2/E4/E6) | 31.58 MB | 8.50 MB | 3.7× |
+| TinyMelNet (E3/E5) | 2.03 MB | 1.28 MB | 1.6× |
 
 **Reading the int8 numbers correctly.** The int8 evaluation is *not* the full
 test set. It is a stratified 2,000-clip subset (1,000 per label, seeded) scored
@@ -434,19 +603,44 @@ the §4 accuracy table. **AUC is the comparable quantity**, and it barely moves:
 | E2 | 0.983 | 0.978 | 0.887 |
 | E3 | 0.944 | 0.949 | 0.876 |
 | E4 | 0.984 | 0.975 | 0.878 |
+| E5 | 0.959 | 0.963 | 0.904 |
+| E6 | 0.986 | 0.979 | 0.856 |
 
-Ranking quality survives dynamic quantization: −0.005 for the Whisper runs and
-+0.005 for TinyMelNet (within subset noise). What quantization does move is
-**calibration**, and the threshold does not travel with it: the E2 int8 model
-scores 0.947 on the 225 Hinglish clips at threshold 0.63, against 0.951 for
-fp32 — close, but the two artifacts are not producing identical probabilities.
+Ranking quality survives dynamic quantization: −0.005 for the Whisper runs (E6:
+−0.007) and +0.005/+0.004 for TinyMelNet (within subset noise). What quantization
+moves is **calibration**, and the threshold does not travel with it. E6 is the
+clearest case: AUC holds at 0.979 while subset accuracy at the fp32 threshold
+drops to 0.856, the lowest in the table for the strongest model in the report.
+Separability is intact; the operating point has shifted underneath it.
 
-**Recommendation: recalibrate the threshold per exported artifact.** Tune on the
-validation split against the exact `.onnx` you intend to serve rather than
-inheriting the fp32 number. The per-run thresholds already vary widely between
-otherwise-identical models (E1 0.35, E2 0.63, E3 0.53, E4 0.35), which shows the
-operating point is a property of the trained artifact and not a constant of the
-task. `tools/error_analysis.py --run <dir> --threshold <t>` sweeps and plots it.
+### Decision-matched thresholds for the shipped int8 artifact
+
+E2 showed the same symptom more mildly — 0.887 subset accuracy at the fp32
+threshold of 0.63 against an int8 AUC of 0.978 — and an earlier draft of this
+report read that as a quantization accuracy cost. It is not. It is a calibration
+shift, and it can be corrected without touching the weights.
+
+The correction is a **decision-matching** sweep rather than an accuracy sweep:
+take clips the model was trained on (600 held-in synthetic clips — *not* test
+data, and no test labels are consulted at any point), score them with both the
+fp32 and the int8 graph, and pick the int8 threshold that reproduces the most
+fp32-at-0.63 decisions. The answer is **0.50**, which agrees with fp32 on
+**99.7% of the 600 clips**. Recorded in `models/metrics.json` as
+`int8_threshold_decision_matched` alongside `int8_threshold_note`.
+
+This matters because it changes what "use threshold 0.63" means depending on
+which file you load. The demo and the Space now read
+`int8_threshold_decision_matched` when present and fall back to the fp32-tuned
+`threshold` otherwise (`demo/app.py::tuned_threshold`), so the shipped int8
+Whisper model defaults to **0.50** and the shipped int8 TinyMelNet (E5, which has
+no decision-matched entry) defaults to its own tuned **0.57**.
+
+**Recommendation: recalibrate per exported artifact.** Never inherit a threshold
+across a quantization boundary. The per-run fp32 thresholds already vary widely
+between otherwise-identical models (E1 0.35, E2 0.63, E3 0.53, E4 0.35, E5 0.57,
+E6 0.54), which shows the operating point is a property of the trained artifact
+and not a constant of the task; requantization moves it again.
+`tools/error_analysis.py --run <dir> --threshold <t>` sweeps and plots it.
 
 ## 8. Limitations and future work
 
@@ -474,7 +668,30 @@ task. `tools/error_analysis.py --run <dir> --threshold <t>` sweeps and plots it.
 - **Single seed (42), one run per configuration.** No error bars. The E2/E4
   static-metric gaps (0.013 on n=225, 0.001 on n=9,329) are well inside what seed
   variance would plausibly produce — which is exactly why §5.3 rests on the
-  stress test and not on those gaps.
+  stress test and not on those gaps. The same caution applies to §5.5: E2 vs E6
+  on Hinglish is 3 clips out of 225, and the claim rests on the threshold-free
+  AUC drop (0.986 → 0.963) rather than on those 3 clips.
+- **E6's multilingual gains are inferred, not measured.** The 21-language tail is
+  train-only and the v3.2 test split is English+Hindi, so the
+  `multilingual_other` test slice is **n=0** — there is no row anywhere in this
+  report that measures E6 on Arabic, Chinese or any of the other 19 languages.
+  The English, Hindi and `human_audio` improvements are real and measured; any
+  statement that E6 is "more multilingual" is an inference from training
+  composition, and this report does not make it.
+- **The distilled student inherits its teacher's biases.** E5 is trained to
+  reproduce E2's soft outputs at 0.7 of its loss weight, so every prior E2 holds
+  — including whatever it learned from four TTS voices and 89 templates — is
+  transferred by construction, and none of E5's numbers are independent evidence
+  about those priors. A student cannot correct a teacher's systematic error; it
+  can only fail to reach it. E5's Hinglish accuracy staying flat at 0.871 while
+  its AUC improved (§5.6) is the visible edge of that ceiling.
+- **E5's gain is not cleanly attributed.** It changes two things against E3 at
+  once — the teacher and 2.4× the training rows — and the report has no
+  no-teacher run on the expanded prep to separate them (§5.6).
+- **The int8 decision-matched threshold is validated on 600 synthetic clips**
+  (§7), all held-in and all TTS. 99.7% decision agreement with fp32 is a strong
+  result on that set, but it says nothing about agreement on real human audio or
+  at other operating points, and it was measured for E2's artifact only.
 - **The stress test uses digital silence**, i.e. exact zeros. Real pauses contain
   room tone, breath and mic self-noise. Zeros are the cleanest probe of the
   correlation under test, but a room-tone version would be a stronger claim, and
@@ -485,8 +702,11 @@ task. `tools/error_analysis.py --run <dir> --threshold <t>` sweeps and plots it.
   constraint on shipping the weights, not a formality.
 - **Not yet measured:** streaming behaviour under repeated calls as silence grows
   (the demo simulates it, but it is not quantified); interaction with a specific
-  VAD's firing policy; and the accuracy/latency curve for E3 trained to actual
-  convergence rather than 8 epochs.
+  VAD's firing policy; the accuracy/latency curve for TinyMelNet trained to
+  actual convergence rather than 8 epochs; the silence stress test (§5.3) for E5
+  and E6, which was run for E2 and E4 only; and E6 rerun with the synthetic
+  Hinglish corpus scaled to hold its 4.6% share, which §5.5 identifies as the
+  experiment that would settle the dilution finding.
 
 ## 9. Reproduction
 
@@ -495,7 +715,7 @@ Everything below runs from the repo root with `.venv/Scripts/python.exe`
 
 | step | command | output |
 |---|---|---|
-| tests (31, ~24 s) | `python -m pytest -q` | feature parity vs HF, augmentation, sampler, metrics, notebook invariants, train smoke |
+| tests (39, ~1 min) | `python -m pytest -q` | feature parity vs HF, augmentation, sampler, metrics, notebook invariants, train + distillation smoke |
 | Hinglish corpus plan | `python -m synth.corpus` | `synth/output/corpus_plan.jsonl` |
 | Hinglish TTS render | `python -m synth.tts_generate` | `synth/output/audio/`, `boundaries/`, `manifest.jsonl` |
 | package + split | `python -m synth.package_kaggle` | `manifest.parquet` (template-level split), `hinglish-synth.zip` |
@@ -522,4 +742,8 @@ with 0.5 s and 1.0 s of zeros appended, and count the decisions that change and,
 among those, the ones going incomplete → complete.
 
 Per-run configs and full metrics live in `experiments/run_*/metrics.json`;
-`src/turn_detector/config.py` is the single source of truth for E1–E4.
+`src/turn_detector/config.py` is the single source of truth for E1–E6, including
+the distillation knobs (`kd_teacher`, `kd_alpha`, `kd_temperature`). E5 is the
+one run that needs an extra input: `train(..., teacher_dir=<dir with
+e2_hinglish_aug/ckpt_best.pt>)`, staged on Kaggle as the `turn-detect-ckpt`
+dataset.

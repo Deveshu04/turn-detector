@@ -37,9 +37,30 @@ filler words and trailing conjunctions).
   samples of 16 kHz mono, **right-aligned** (last 8 s kept, shorter clips
   left-padded).
 - **Output:** one logit; `sigmoid(logit)` = P(turn complete).
-- **Decision threshold: 0.63**, tuned on the validation split. Not 0.5.
+- **Decision threshold: 0.50 for `model_int8.onnx`, 0.63 for `model_fp32.onnx`.**
+  The int8 0.50 is a calibrated value that happens to land on the framework
+  default, not the default itself — see [Thresholds](#thresholds) below for why
+  the two files differ.
 - **Runtime:** numpy + onnxruntime only. No torch, no transformers — the mel
   filterbank ships as a bundled `.npz`.
+
+### Two variants ship
+
+| file | model | params | int8 size | threshold | overall acc | hinglish acc |
+|---|---|---:|---:|---|---|---|
+| `model_int8.onnx` | WhisperTinyTurn (`e2_hinglish_aug`) | 7,885,953 | 8.50 MB | **0.50** | 0.938 | **0.951** |
+| `model_tinymel_int8.onnx` | TinyMelNet, distilled (`e5_distill`) | 507,265 | 1.28 MB | **0.57** | 0.896 | 0.871 |
+
+Accuracies are fp32 on the full test split (n=9,329 / n=225); the threshold
+column is the one to use with the int8 file listed.
+
+The distilled variant is the same 8 s log-mel input and the same single-logit
+output, so it is a drop-in swap: a stride-2 Conv1d stem, three depthwise-separable
+Conv1d blocks and a BiGRU(128) in place of the Whisper encoder, trained against
+the frozen Whisper model's soft outputs (α = 0.3, T = 2.0). It runs in **~14 ms**
+against ~91 ms on the same laptop CPU and costs 4.2 accuracy points overall —
+notably more on Hinglish (8.0 points), so prefer the accurate model whenever the
+budget allows. Its metrics live in `metrics_tinymel.json`.
 
 ## Intended use
 
@@ -68,7 +89,9 @@ import numpy as np
 import soundfile as sf
 from turn_detector.infer import TurnDetector
 
-detector = TurnDetector("model_int8.onnx", threshold=0.63, num_threads=1)
+detector = TurnDetector("model_int8.onnx", threshold=0.50, num_threads=1)
+# smaller/faster, same interface:
+# detector = TurnDetector("model_tinymel_int8.onnx", threshold=0.57)
 
 wav, sr = sf.read("clip.flac")          # mono 16 kHz float; resample first if not
 result = detector.predict(np.asarray(wav, dtype=np.float32))
@@ -88,6 +111,28 @@ curve = detector.sliding_probs(wav, step_s=0.24)   # [{"t": 0.24, "prob": ...}, 
 
 The class is torch-free — `numpy` and `onnxruntime` are the only hard
 dependencies.
+
+## Thresholds
+
+**A threshold belongs to a file, not to the task.** Use these:
+
+| artifact | threshold | how it was chosen |
+|---|---|---|
+| `model_fp32.onnx` | **0.63** | accuracy-tuned on the validation split |
+| `model_int8.onnx` | **0.50** | *decision-matched* to fp32@0.63 (below) |
+| `model_tinymel_int8.onnx` | **0.57** | accuracy-tuned on the validation split |
+
+Dynamic int8 quantization preserves the ranking but shifts the probabilities, so
+inheriting the fp32 threshold across the quantization boundary silently moves the
+operating point. Scoring 600 held-in synthetic clips with both graphs and picking
+the int8 threshold that reproduces the most fp32-at-0.63 verdicts gives **0.50,
+agreeing with fp32 on 99.7% of them**. No test labels were used. This is recorded
+as `int8_threshold_decision_matched` in `metrics.json`; the reference demo reads
+that key when present and falls back to the fp32 `threshold` otherwise.
+
+If you requantize, re-derive the threshold for your own artifact rather than
+copying any number here. Lowering it makes the agent more eager to reply; raising
+it makes it wait longer.
 
 ## Metrics
 
@@ -117,6 +162,35 @@ Against the same architecture trained without synthetic Hinglish data
 | english accuracy (n=7,820) | 0.938 | 0.938 | 0.000 |
 | hindi accuracy (n=1,284) | 0.931 | 0.932 | +0.001 |
 
+### The other runs, same test split (fp32, each at its own tuned threshold)
+
+| slice | n | E2 **this model** | E3 tiny, no teacher | E5 tiny, **distilled** | E6 2.4× data |
+|---|---:|---|---|---|---|
+| overall | 9,329 | **0.938** | 0.871 | 0.896 | 0.943 |
+| english | 7,820 | 0.938 | 0.868 | 0.898 | 0.945 |
+| hindi | 1,284 | 0.932 | 0.884 | 0.885 | 0.931 |
+| **hinglish** | 225 | **0.951** | 0.871 | 0.871 | 0.938 |
+| filler | 2,381 | 0.914 | 0.856 | 0.870 | 0.915 |
+| human_audio | 5,367 | 0.947 | 0.877 | 0.904 | 0.954 |
+| AUC, hinglish | 225 | **0.986** | 0.949 | 0.962 | 0.963 |
+| AUC, overall | 9,329 | 0.983 | 0.944 | 0.959 | 0.986 |
+
+Two results worth stating explicitly, because they explain what ships:
+
+- **E5 (`model_tinymel_int8.onnx`) is E3 with a teacher.** Distilling this model's
+  frozen checkpoint into the 507k-parameter architecture buys **+2.5 points
+  overall** (0.871 → 0.896) and **+3.0 on English** at identical size, and lifts
+  Hinglish AUC 0.949 → 0.962. E5 also trains on 2.4× the rows E3 saw, so the two
+  effects are not separated.
+- **E6 trains on 111,509 rows** (English uncapped plus a 21-language tail, 2.4×)
+  and beats this model nearly everywhere — overall, English, `human_audio` — while
+  **losing on Hinglish** (0.938 vs 0.951; AUC 0.963 vs 0.986). The synthetic
+  Hinglish corpus stayed the same size, so its share of training fell from 4.6%
+  to 1.9% and its effect was diluted. Since Hinglish is the target domain, E6 is
+  not shipped and E2 is also what E5 is distilled from. Note that E6's
+  multilingual tail is **train-only** and the v3.2 test split is English+Hindi,
+  so nothing in this table measures E6 on those 21 languages.
+
 ### Per-kind breakdown, Hinglish split (int8, threshold 0.63)
 
 | kind | label | n | accuracy |
@@ -127,6 +201,10 @@ Against the same architecture trained without synthetic Hinglish data
 | `tail_conj` (ends on a dangling conjunction) | incomplete | 15 | 0.867 |
 | `tail_filler` (ends on a trailing filler) | incomplete | 15 | 1.000 |
 | all | mixed | 225 | 0.947 |
+
+This breakdown predates the int8 threshold calibration above and was scored at
+0.63 on the int8 file. It is left as measured; at the decision-matched 0.50 the
+int8 verdicts track fp32, whose Hinglish accuracy is 0.951.
 
 ### Robustness to trailing silence
 
@@ -150,21 +228,34 @@ does not predict production behaviour for this task.
 | | AUC — fp32, full test (n=9,329) | AUC — int8, subset (n=2,000) |
 |---|---|---|
 | overall | 0.983 | 0.978 |
+| distilled variant | 0.959 | 0.963 |
 
 The int8 figure is measured on a class-balanced stratified 2,000-clip subset
-(1,000 per label) scored at the fp32-tuned threshold, so its **accuracy**
-(0.887) is not comparable to the full-test accuracy above; AUC is the
-comparable quantity and it drops by 0.005. fp32 ONNX matches torch to
+(1,000 per label), so its **accuracy** is not comparable to the full-test
+accuracy above; AUC is the comparable quantity and it drops by 0.005 for this
+model (and is flat for the distilled one). fp32 ONNX matches torch to
 max |Δprob| = 1.19e-07.
+
+Quantization costs **ranking quality almost nothing and calibration quite a lot**.
+Scored at the fp32 threshold of 0.63, the int8 subset accuracy is 0.887 — which
+looks like a quantization penalty but is not one, since the AUC is intact. At the
+decision-matched threshold of 0.50 the int8 model reproduces fp32 verdicts on
+99.7% of the calibration clips. Use 0.50 with the int8 file.
 
 ### Latency and size
 
-| | value |
-|---|---|
-| int8 ONNX | 8.50 MB |
-| fp32 ONNX | 31.58 MB |
-| p50 total, 1 thread (dev laptop) | ~91 ms (~83 ms model + ~8 ms mel) |
-| p50 total, 4 threads (dev laptop) | ~59 ms |
+| | this model | distilled variant |
+|---|---|---|
+| params | 7,885,953 | 507,265 |
+| int8 ONNX | 8.50 MB | 1.28 MB |
+| fp32 ONNX | 31.58 MB | 2.03 MB |
+| p50 total, 1 thread (dev laptop) | ~91 ms (~83 ms model + ~8 ms mel) | ~14 ms (~7 ms model + ~7 ms mel) |
+| p50 total, 4 threads (dev laptop) | ~59 ms | ~18 ms |
+
+The mel frontend costs a fixed ~8 ms either way, which is why it dominates the
+distilled model's budget and is a rounding error in this one — and why the small
+model is *slower* at 4 threads than at 1 (too little work to amortize the thread
+handoff).
 
 Laptop measurements vary about 35% between sessions with thermal and power
 state; an earlier session on the same machine measured ~126 ms single-threaded.
@@ -220,6 +311,14 @@ still balanced *after* `pause_cut` flips labels on the fly.
 Export: `torch.onnx.export` at opset 17 with static batch 1, then
 `onnxruntime.quantization.quantize_dynamic` (`QuantType.QUInt8`).
 
+**The distilled variant** (`model_tinymel_int8.onnx`, `e5_distill`) uses the same
+augmentation recipe on an expanded prep — 111,509 train rows: English uncapped,
+all Hindi, a 21-language tail capped at 850 per (language, label), plus the same
+2,157 synthetic Hinglish clips — for 8 epochs (head LR 3e-4), 32.1 minutes on a
+T4, best validation AUC 0.963. Its loss blends the hard label with this model's
+frozen soft outputs on the identical augmented batch:
+`0.3·BCE(student, label) + 0.7·BCE(student/T, σ(teacher/T))` at `T = 2.0`.
+
 ## Bias, risks and limitations
 
 - **The Hinglish evaluation is entirely TTS-synthetic.** Every Hinglish number
@@ -237,13 +336,21 @@ Export: `torch.onnx.export` at opset 17 with static batch 1, then
 - **Narrow domain.** The 89 templates cover delivery, recharge, travel, leave
   approval and traffic. Medical, legal, financial or technical Hinglish is
   untested.
-- **Use threshold 0.63, and recalibrate for your artifact.** The default 0.5 is
-  wrong for this model. The tuned threshold varies widely across
-  otherwise-identical training runs (0.35–0.63), so it is a property of the
-  specific exported file, not of the task — retune on your own validation data
-  against the exact `.onnx` you serve, especially after any requantization.
-  Lowering the threshold makes the agent more eager to reply; raising it makes
-  it wait longer.
+- **Thresholds are per file (0.50 int8 / 0.63 fp32 / 0.57 distilled).** The tuned
+  threshold varies widely across otherwise-identical training runs (0.35–0.63),
+  so it is a property of the specific exported file, not of the task, and
+  quantization shifts it again. Retune on your own validation data against the
+  exact `.onnx` you serve, especially after any requantization. The
+  decision-matching calibration behind the int8 0.50 was measured on **600
+  held-in synthetic clips for this model only** — it says nothing about agreement
+  on real human audio, and it was not derived for the distilled variant.
+- **The distilled variant inherits this model's biases by construction.** 70% of
+  its training signal is this model's soft outputs, so every prior encoded here —
+  including everything learned from four TTS voices and 89 templates — transfers
+  to it. Its numbers are not independent evidence about those priors. A student
+  cannot correct a teacher's systematic error; it can only fail to reach it,
+  which is what its flat Hinglish accuracy (0.871, against the teacher's 0.951)
+  looks like in practice. Do not read the distilled model as a second opinion.
 - **Single seed (42), one run per configuration.** No error bars; differences
   under ~1.5 points on the 225-clip Hinglish slice should not be treated as
   real.
