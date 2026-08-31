@@ -321,12 +321,15 @@ frozen soft outputs on the identical augmented batch:
 
 ## Bias, risks and limitations
 
-- **The Hinglish evaluation is entirely TTS-synthetic.** Every Hinglish number
-  on this card comes from edge-tts audio. There are **no real human
-  code-switched recordings** in the evaluation. Synthetic speech has cleaner
-  boundaries, more regular prosody and none of the background noise,
-  backchannels or overlapping talk of a real call. Expect real-world Hinglish
-  performance to be lower than 0.951; how much lower is unmeasured.
+- **The main Hinglish evaluation is TTS-synthetic; the real-voice check is
+  small.** The 0.951 comes from edge-tts audio. A 30-clip single-speaker
+  phone-microphone set (fresh sentences, pre-registered thresholds) measured
+  the real-world gap directly: **0.800 accuracy / AUC 0.942**, with 15/16
+  incompletes correct and 1/16 early-fires after a 1-second real pause — the
+  errors sit almost entirely on complete sentences judged "still speaking"
+  (the model waits rather than interrupts). One speaker and n=30 is
+  directional evidence only; broader real code-switched evaluation remains
+  future work.
 - **Four voices, two genders, one country.** All Hinglish training and test
   audio comes from `hi-IN-Swara`, `hi-IN-Madhur`, `en-IN-Neerja` and
   `en-IN-Prabhat`. Accent, age and recording-condition diversity are far below

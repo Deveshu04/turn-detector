@@ -535,6 +535,35 @@ E5 replaces E3 as the shipped small model (`models/model_tinymel_int8.onnx`, the
 demo's **fast** dropdown entry). E3 remains in the report as the no-teacher
 control that makes E5's number meaningful.
 
+### 5.7 Real-voice spot check: the errors point the right way
+
+Every Hinglish number above comes from TTS audio, so we recorded a small real
+set: 30 clips (14 complete / 16 incomplete) spoken by one Indian speaker into a
+phone microphone, using fresh sentences disjoint from the training templates,
+covering the same five categories as the synthetic corpus (complete,
+mid-sentence filler, trailing conjunction, trailing filler, mid-thought stop).
+Scored at each model's pre-registered threshold — nothing tuned on these clips.
+
+| model | acc | AUC | incompletes correct | early-fires after +1.0 s real pause |
+|---|---|---|---|---|
+| E2 (shipped) | 0.800 | 0.942 | 15/16 | **1/16** |
+| E5 (fast) | 0.767 | 0.888 | 13/16 | 2/16 |
+| E4 (no pause aug) | 0.767 | 0.924 | 15/16 | 1/16 |
+
+The 15-point drop from the synthetic 95.1% is honest domain shift (one
+speaker, phone mic, natural pacing). What matters is its structure: E2's
+incomplete detection barely moves (trailing fillers 5/5, mid-thought stops 6/6)
+and it early-fires once in sixteen 1-second real pauses — the
+interrupt-the-user failure stays rare on real speech. Five of its six errors
+are complete sentences judged "still speaking" (two confidently, at p≈0.01),
+i.e. the model errs toward waiting, which costs response latency rather than a
+barge-in. n=30 and a single speaker make this directional evidence, not a
+benchmark; per-clip numbers are in `experiments/real_voice_eval.json`, and the
+raw audio deliberately stays out of the repository. E4's pause weakness does
+not reproduce at n=16 (1/16, vs 44.5% on the n=137 synthetic test) — small-n
+noise cuts both ways, and the synthetic stress test remains the controlled
+evidence for the pause-augmentation claim.
+
 ## 6. Latency and size
 
 Measured with `turn_detector.infer.benchmark` — int8 ONNX, onnxruntime
