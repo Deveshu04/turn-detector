@@ -9,7 +9,8 @@ __pycache__/
 data/
 synth/output/audio/
 synth/output/boundaries/
-synth/output/*.zip
+synth/output/**/*.zip
+synth/output/kaggle_upload/
 *.ckpt
 *.pt
 !models/**/*.pt
