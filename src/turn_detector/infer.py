@@ -1,9 +1,9 @@
 """CPU inference wrapper around the exported ONNX model.
 
 Torch-free: mel extraction reproduces Whisper's feature math in numpy against a
-bundled mel filterbank (mel_filters.npz), so the Gradio Space needs only numpy +
-onnxruntime — no torch, no transformers. transformers.audio_utils is used solely
-as a fallback to build the filters when the .npz is absent.
+bundled mel filterbank (mel_filters.npz), so the Gradio Space needs only numpy
+and onnxruntime. transformers.audio_utils is used solely as a fallback to build
+the filters when the .npz is absent.
 """
 
 import time
@@ -91,7 +91,7 @@ class TurnDetector:
         }
 
     def sliding_probs(self, wav: np.ndarray, step_s: float = 0.24) -> list[dict]:
-        """P(complete) as the clip 'plays' — for the demo's streaming view."""
+        """P(complete) as the clip 'plays', for the demo's streaming view."""
         results = []
         step = int(step_s * SAMPLE_RATE)
         for end in range(step, len(wav) + step, step):

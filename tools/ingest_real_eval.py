@@ -1,9 +1,9 @@
 """Ingest phone/voice-recorder clips as the real-voice Hinglish eval set.
 
 Workflow:
-  1. `python -m tools.ingest_real_eval --sheet` writes data/real_eval/PROMPTS.txt
-     — open it on your phone and record one clip per prompt, in order.
-  2. Put the 30 files (m4a/mp3/wav/ogg — anything ffmpeg reads) into one folder,
+  1. `python -m tools.ingest_real_eval --sheet` writes data/real_eval/PROMPTS.txt.
+     Open it on your phone and record one clip per prompt, in order.
+  2. Put the 30 files (m4a/mp3/wav/ogg, or anything ffmpeg reads) into one folder,
      named so alphabetical order == prompt order (phone recorders' default
      "Recording 001..." naming already does this).
   3. `python -m tools.ingest_real_eval <folder>` converts each to 16 kHz mono
@@ -26,7 +26,7 @@ EXTS = {".m4a", ".mp3", ".wav", ".ogg", ".opus", ".flac", ".aac", ".webm", ".3gp
 
 def write_sheet():
     OUT.mkdir(parents=True, exist_ok=True)
-    lines = ["REAL-VOICE HINGLISH EVAL — record one clip per line, in order.",
+    lines = ["REAL-VOICE HINGLISH EVAL: record one clip per line, in order.",
              "Speak naturally. Stop recording ~1 second after you stop speaking.",
              ""]
     for i, p in enumerate(PROMPTS, 1):
@@ -36,7 +36,7 @@ def write_sheet():
         lines.append("")
     path = OUT / "PROMPTS.txt"
     path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"wrote {path} — open it on your phone and record in order")
+    print(f"wrote {path}; open it on your phone and record in order")
 
 
 def ingest(folder: str):
@@ -48,7 +48,7 @@ def ingest(folder: str):
     if not files:
         sys.exit(f"no audio files found in {folder}")
     if len(files) != len(PROMPTS):
-        print(f"warning: {len(files)} files for {len(PROMPTS)} prompts — "
+        print(f"warning: {len(files)} files for {len(PROMPTS)} prompts, "
               f"mapping the first {min(len(files), len(PROMPTS))} in order")
     AUDIO.mkdir(parents=True, exist_ok=True)
     rows = []
@@ -75,8 +75,8 @@ def ingest(folder: str):
     n_c = sum(r["label"] for r in rows)
     print(f"\n{len(rows)} clips ingested ({n_c} complete / {len(rows)-n_c} "
           f"incomplete) -> {MANIFEST}")
-    print("Listen-check a couple of FLACs in data/real_eval/audio/, then ask "
-          "Claude to score them.")
+    print("Listen-check a couple of FLACs in data/real_eval/audio/ before "
+          "scoring.")
 
 
 if __name__ == "__main__":

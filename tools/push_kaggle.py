@@ -34,7 +34,7 @@ notebook's TEACHER_FROM at `/kaggle/input/turn-detect-ckpt/run_<teacher>`.
   IMPORTANT WRINKLE: `kaggle kernels output` only ever returns the *latest
   completed version* of the train kernel. So `--teacher X` works when that
   latest version is the X run (stage the teacher right after X finishes, before
-  running anything else) — otherwise X's checkpoint is simply not in the pull
+  running anything else). Otherwise X's checkpoint is simply not in the pull
   and staging fails. If X's checkpoint is already inside turn-detect-ckpt from
   an earlier staging, skip the round trip with `--no-stage`: the notebook is
   still wired to the teacher and the dataset is still attached.
@@ -135,7 +135,7 @@ def stage_ckpt(experiment: str, need: str = "ckpt_last.pt",
     locally and (re)published as `turn-detect-ckpt`, which the next train push
     attaches as a normal input dataset.
 
-    Every `run_*/ckpt_*.pt` present in the pulled output is kept — a resume push
+    Every `run_*/ckpt_*.pt` present in the pulled output is kept: a resume push
     that also carries a distillation teacher needs two different runs in the
     same dataset. Only the *requested* runs (`experiment` plus anything in
     `extra`, as {run_name: required file}) are required to be there.
@@ -182,10 +182,10 @@ def stage_ckpt(experiment: str, need: str = "ckpt_last.pt",
                   for p in CKPT_STAGE.rglob("ckpt_*.pt"))
     print("staging:", ", ".join(kept))
 
-    # `--dir-mode zip` FLATTENS directory structure on extraction (verified:
-    # run_x/ckpt_best.pt mounted as bare ckpt_best.pt and broke the notebook's
-    # resolver). An explicitly-built zip keeps its internal paths on extraction,
-    # exactly like the hinglish-synth upload. So bundle by hand.
+    # `--dir-mode zip` FLATTENS the directory structure on extraction:
+    # run_x/ckpt_best.pt mounts as a bare ckpt_best.pt and breaks the
+    # notebook's resolver. An explicitly-built zip keeps its internal paths,
+    # exactly like the hinglish-synth upload, so bundle by hand.
     import zipfile
     bundle = CKPT_STAGE / "ckpt_bundle.zip"
     with zipfile.ZipFile(bundle, "w", zipfile.ZIP_STORED) as z:
@@ -226,8 +226,8 @@ def push(kind: str, experiment: str | None = None, resume: bool = False,
             sys.exit(
                 f"--teacher {teacher} but {experiment}'s kd_teacher is "
                 f"{declared!r}. Set kd_teacher in src/turn_detector/config.py "
-                f"(this changes the config hash — correct, it is a different "
-                f"experiment) and re-push."
+                f"(this changes the config hash, which is correct: it is a "
+                f"different experiment) and re-push."
             )
     if resume:
         # one round trip carries both: the student's own ckpt_last and,

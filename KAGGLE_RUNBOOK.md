@@ -1,11 +1,11 @@
-# Kaggle Runbook — CLI workflow
+# Kaggle Runbook: CLI workflow
 
 Everything below is driven from the repo with `tools/push_kaggle.py`. The
 manual click-path still works and is kept as an appendix at the bottom.
 
 ## Prerequisites (once)
 
-- A **phone-verified Kaggle account** (Settings → Phone verification) — required
+- A **phone-verified Kaggle account** (Settings → Phone verification), required
   for GPU and Internet-enabled notebooks.
 - API token: Kaggle → Settings → **Create New Token** → save `kaggle.json` to
   `%USERPROFILE%\.kaggle\kaggle.json` (Windows) or `~/.kaggle/kaggle.json`.
@@ -18,7 +18,7 @@ pushing (`push_kaggle` does this for you):
 .venv/Scripts/python.exe -m tools.build_notebooks
 ```
 
-## Step 1 — Upload the Hinglish synthetic dataset (once, ~5 min)
+## Step 1: Upload the Hinglish synthetic dataset (once, ~5 min)
 
 Build it, then create the dataset from the extracted folder:
 
@@ -36,7 +36,7 @@ Confirm on the dataset page that `manifest.parquet` and `audio/` sit at the top
 level. If they end up nested one level deeper, adjust `HINGLISH` in
 `tools/push_kaggle.py` (`set_config_cell`).
 
-## Step 2 — Data prep (once, CPU, internet ON, ~1–2 h)
+## Step 2: Data prep (once, CPU, internet ON, ~1–2 h)
 
 ```
 .venv/Scripts/python.exe -m tools.push_kaggle prep
@@ -57,10 +57,10 @@ mount. The final prep cell prints the shard/entry counts and asserts every
 manifest row has a shard entry.
 
 If the prep run is interrupted, just push it again. A committed batch run starts
-from an empty `/kaggle/working`, so there is nothing to resume from — prep
+from an empty `/kaggle/working`, so there is nothing to resume from; prep
 normally completes inside a single session.
 
-## Step 3 — Training runs (GPU, sequential)
+## Step 3: Training runs (GPU, sequential)
 
 For each experiment `e1_baseline` → `e2_hinglish_aug` → `e3_tinymel_scratch`
 → `e4_no_pause_aug`:
@@ -76,7 +76,7 @@ For each experiment `e1_baseline` → `e2_hinglish_aug` → `e3_tinymel_scratch`
 `hinglish-synth` + the prep kernel, and commits with GPU + internet on.
 
 `pull` downloads `run_<experiment>/` (`metrics.json`, `ckpt_best.pt`,
-`model_fp32.onnx`, `model_int8.onnx`); put it under `experiments/` — Phase 3
+`model_fp32.onnx`, `model_int8.onnx`); put it under `experiments/`; Phase 3
 analysis reads `experiments/run_*/metrics.json`.
 
 ### Time budget and resume
@@ -105,7 +105,7 @@ That does the checkpoint round trip a kernel cannot do for itself:
 
 Training picks up from `ckpt_last.pt` (≤500 steps lost). The notebook now
 **hard-fails** if `RESUME_FROM` has no `ckpt_last.pt`, or if the checkpoint's
-`cfg_hash` doesn't match the experiment config — previously it silently
+`cfg_hash` doesn't match the experiment config. Previously it silently
 restarted from step 0 while the log claimed it was resuming. `config_hash()`
 ignores `notes` and `checkpoint_every_steps`, so cosmetic edits don't invalidate
 a checkpoint.
@@ -129,7 +129,7 @@ experiments are done.
 
 ---
 
-## Appendix — manual fallback (no CLI)
+## Appendix: manual fallback (no CLI)
 
 If the API token or CLI is unavailable:
 

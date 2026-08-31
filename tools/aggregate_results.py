@@ -24,7 +24,7 @@ def load_all() -> dict[str, dict]:
 
 
 def fmt(v) -> str:
-    return f"{v:.3f}" if isinstance(v, (int, float)) else "—"
+    return f"{v:.3f}" if isinstance(v, (int, float)) else "-"
 
 
 def main():

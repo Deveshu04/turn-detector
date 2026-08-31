@@ -1,7 +1,7 @@
 """Generate self-contained Kaggle notebooks from the repo sources.
 
 02_train.ipynb embeds src/turn_detector/*.py as %%writefile cells, so the
-notebook always matches the tested library — single source of truth, no
+notebook always matches the tested library: a single source of truth, with no
 Kaggle-side package management. Re-run this after editing src/ and re-upload.
 
 Run: python -m tools.build_notebooks
@@ -20,11 +20,11 @@ MODULES = ["__init__", "common", "features", "augment", "config", "model",
 
 
 # --------------------------------------------------------------------------
-# 01_data_prep — CPU, internet ON
+# 01_data_prep: CPU, internet ON
 # --------------------------------------------------------------------------
 
 PREP_MD = """\
-# 01 · Data prep — smart-turn v3.2 → English + Hindi + a multilingual tail
+# 01 · Data prep: smart-turn v3.2 → English + Hindi + a multilingual tail
 
 **Kaggle settings:** CPU (no GPU needed) · **Internet ON** · takes ~2-3 h.
 
@@ -33,9 +33,9 @@ to 16 kHz mono, keeps the last 8 s, and writes FLAC into 64 **ZIP shards**
 (`/kaggle/working/prep/shards/shard_NN.zip`) next to `manifest.parquet`.
 
 **Why shards:** Kaggle's kernel-output publishing silently fails past roughly
-100k files — the version completes, but its output is an 845-byte empty
+100k files. The version completes, but its output is an 845-byte empty
 `_output_.zip`. The earlier 56k-clip prep published fine; this one keeps ~122k,
-so the clips ride inside stored (uncompressed — FLAC already is) zips. Each
+so the clips ride inside stored zips (uncompressed, as FLAC already is). Each
 entry's arcname is exactly the `path` the manifest records
 (`audio/<2-hex>/<id>.flac`), so notebook 02 extracts the shards to
 `/tmp/prep_audio` and uses that as the audio root, unchanged from the old
@@ -46,18 +46,18 @@ loose-file layout.
 | stream | kept | cap |
 |---|---|---|
 | train, `eng` | all (effectively uncapped) | 33,000 / label |
-| train, `hin` | all | — |
+| train, `hin` | all | none |
 | train, everything else | a tail for multilingual robustness | 850 / (language, label) |
-| test | `eng` + `hin` only | — |
+| test | `eng` + `hin` only | none |
 
 English/Hindi are renamed to `english`/`hindi` (every downstream consumer masks
 on the long names); other languages keep their **raw ISO-639-3 code** and are
-all assigned `split="train"` — validation stays EN+HI so that best-checkpoint
+all assigned `split="train"`: validation stays EN+HI so that best-checkpoint
 selection is comparable with the earlier experiments, and the test stream is
 untouched so the headline numbers keep meaning the same thing.
 
 **Size:** expect **~16-17 GB**; Kaggle's `/kaggle/working` limit is ~19.6 GB.
-The final cell prints the working-size total — that printout **is** the guard:
+The final cell prints the working-size total, and that printout **is** the guard:
 if it comes out near 19 GB, lower `OTHER_CAP_PER_LANG_LABEL` and re-run rather
 than pushing a training job at a truncated dataset.
 
@@ -66,9 +66,9 @@ Dataset from this notebook's output named **`smart-turn-enhi-prep`**
 (New Dataset → import from notebook output). Training runs attach that dataset.
 
 **Interrupted?** A committed batch run starts from an empty `/kaggle/working`,
-so there is nothing to resume from — just *Save & Run All* again. Prep normally
+so there is nothing to resume from: just *Save & Run All* again. Prep normally
 finishes well inside a single session. (The resume bookkeeping in the code only
-helps when you re-run cells inside one live interactive session — and a shard
+helps when you re-run cells inside one live interactive session, and a shard
 whose writer was killed outright loses its central directory, which the final
 cell's `entries >= manifest rows` assert catches. Re-run clean if it trips.)
 """
@@ -291,12 +291,12 @@ assert entries >= df.height, f"{entries} shard entries < {df.height} manifest ro
 total_gb = sum(f.stat().st_size for f in OUT.rglob("*")) / 1e9
 print(f"output size: {total_gb:.1f} GB (expect ~16-17 GB; must stay under ~19.6 GB)")
 if total_gb > 19.0:
-    print("!! too close to the /kaggle/working limit — lower OTHER_CAP_PER_LANG_LABEL")
+    print("!! too close to the /kaggle/working limit: lower OTHER_CAP_PER_LANG_LABEL")
 '''
 
 
 # --------------------------------------------------------------------------
-# 02_train — GPU
+# 02_train: GPU
 # --------------------------------------------------------------------------
 
 TRAIN_MD = """\
@@ -306,8 +306,8 @@ TRAIN_MD = """\
 whisper-tiny once) · ~1-2 h per experiment.
 
 **Attach as input datasets** (Add Input):
-1. `smart-turn-enhi-prep` — output of notebook 01
-2. `hinglish-synth` — the uploaded synthetic Hinglish dataset
+1. `smart-turn-enhi-prep`: output of notebook 01
+2. `hinglish-synth`: the uploaded synthetic Hinglish dataset
 3. *(only when resuming)* the previous version's output of THIS notebook
 
 **Run an experiment:** set `EXPERIMENT` in the config cell to one of
@@ -340,7 +340,7 @@ restarting from scratch.
 model_fp32.onnx, model_int8.onnx) into the repo's `experiments/` folder.
 
 The `turn_detector` package below is auto-generated from the tested repo
-sources by `tools/build_notebooks.py` — edit the repo, not the cells.
+sources by `tools/build_notebooks.py`; edit the repo, not the cells.
 """
 
 TRAIN_PIP = "%pip install -q onnx onnxruntime onnxscript polars soundfile"
@@ -377,13 +377,13 @@ if torch.cuda.is_available():
     print(f"GPU: {name} (sm_{cap[0]}{cap[1]})")
     if cap[0] < 7:
         raise RuntimeError(
-            f"{name} (sm_{cap[0]}{cap[1]}) is unsupported by this torch build — "
-            f"session must use the T4 (machine_shape NvidiaTeslaT4). Re-push."
+            f"{name} (sm_{cap[0]}{cap[1]}) is unsupported by this torch build. "
+            f"Session must use the T4 (machine_shape NvidiaTeslaT4). Re-push."
         )
 
 if RESUME_FROM:
-    # fail loudly: a silent fall-through here burns a whole GPU session
-    # restarting from step 0 while the log still says "resuming"
+    # fail loudly: a silent fall-through restarts from step 0 while the log
+    # still says "resuming"
     src_ckpt = Path(RESUME_FROM, "ckpt_last.pt")
     if not src_ckpt.exists():
         raise RuntimeError(
@@ -404,7 +404,7 @@ if RESUME_FROM:
 
 # Kaggle has used both flat (/kaggle/input/<slug>) and nested
 # (/kaggle/input/{datasets,notebooks}/<user>/<slug>) mount layouts, and a
-# source kernel's output takes minutes to publish after it completes — so
+# source kernel's output takes minutes to publish after it completes, so
 # resolve mounts by searching rather than trusting a hardcoded path.
 import os
 
@@ -474,7 +474,7 @@ if shards:
           f"in {(time.time() - t0) / 60:.1f} min")
 else:
     PREP_AUDIO = PREP
-    print(f"no shards/ under {PREP} — reading loose audio from the mount")
+    print(f"no shards/ under {PREP}: reading loose audio from the mount")
 
 real = [(f"{PREP}/manifest.parquet", PREP_AUDIO)]
 synth = [(f"{HINGLISH}/manifest.parquet", HINGLISH)]
@@ -495,7 +495,7 @@ if metrics.get("status") == "time_budget_reached":
         f"To continue:  python -m tools.push_kaggle train {EXPERIMENT} --resume\n"
         f"(or manually: attach this version's output, set\n"
         f" RESUME_FROM = \"/kaggle/input/turn-detect-ckpt/run_{EXPERIMENT}\", Save & Run All)\n"
-        f"No metrics.json/ONNX yet — those are written by the final run."
+        f"No metrics.json/ONNX yet; those are written by the final run."
     )
 '''
 
@@ -506,7 +506,7 @@ from pathlib import Path
 run_dir = Path("/kaggle/working") / f"run_{EXPERIMENT}"
 mpath = run_dir / "metrics.json"
 if not mpath.exists():
-    print(f"no metrics.json in {run_dir} — partial run (see the cell above). "
+    print(f"no metrics.json in {run_dir}: partial run (see the cell above). "
           f"Save Version so ckpt_last.pt is published, then resume.")
     print("files:", sorted(p.name for p in run_dir.glob("*")))
 else:

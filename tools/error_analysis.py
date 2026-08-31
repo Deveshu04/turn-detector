@@ -41,12 +41,11 @@ EXAMPLES = ROOT / "demo" / "examples"
 KINDS = ["full", "cut", "tail_conj", "tail_filler", "midfiller_full"]
 SWEEP = np.round(np.arange(0.05, 0.9501, 0.05), 2)
 
-# ---- palette (dataviz skill reference instance, light surface; validated:
-# slots 1+2 pass lightness band, chroma floor, CVD ΔE 24.7, normal ΔE 33.6,
-# contrast >= 3:1 against #fcfcfb) -------------------------------------------
+# ---- palette (light surface). Slots 1+2 pass the lightness band, the chroma
+# floor, CVD ΔE 24.7, normal ΔE 33.6 and contrast >= 3:1 against #fcfcfb ------
 SURFACE = "#fcfcfb"
-SERIES_1 = "#2a78d6"   # blue   — accuracy / expected-complete
-SERIES_2 = "#eb6834"   # orange — F1 / expected-incomplete
+SERIES_1 = "#2a78d6"   # blue:   accuracy / expected-complete
+SERIES_2 = "#eb6834"   # orange: F1 / expected-incomplete
 TEXT_PRIMARY = "#0b0b0b"
 TEXT_SECONDARY = "#52514e"
 MUTED = "#898781"
@@ -90,7 +89,7 @@ def load_wav(path: Path) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------
-# metrics (no sklearn in this env — small numpy implementations)
+# metrics (no sklearn in this env, so small numpy implementations)
 # --------------------------------------------------------------------------
 def roc_auc(labels: np.ndarray, probs: np.ndarray) -> float:
     """Mann-Whitney U statistic with mid-ranks for ties."""
@@ -144,7 +143,7 @@ def write_worst_errors(rows: list[dict], thr: float, overall: dict, auc: float,
     worst = sorted(rows, key=lambda r: (-abs(r["prob"] - r["label"]), r["id"]))[:20]
 
     L = [
-        "# Worst errors — local Hinglish test split",
+        "# Worst errors: local Hinglish test split",
         "",
         f"- run: `{run_dir.as_posix()}`",
         f"- model: `{(run_dir / 'model_int8.onnx').as_posix()}`",
@@ -236,7 +235,7 @@ def plot_prob_curves(det: TurnDetector, thr: float, out: Path) -> int:
                 solid_joinstyle="round", zorder=3)
         ax.plot(ts[-1:], ps[-1:], marker="o", markersize=5.5, color=color,
                 markeredgecolor=SURFACE, markeredgewidth=1.5, zorder=4)
-        # one direct label per panel: the endpoint (the decision that matters)
+        # one direct label per panel: the endpoint
         ax.annotate(f"{ps[-1]:.2f}", (ts[-1], ps[-1]), textcoords="offset points",
                     xytext=(7, 0), va="center", fontsize=8, color=TEXT_SECONDARY)
         ax.set_title(path.name, loc="left", fontsize=9.5, color=TEXT_PRIMARY,
@@ -322,7 +321,7 @@ def plot_threshold_sweep(rows: list[dict], thr: float, out: Path) -> None:
     ax.set_yticks(np.round(np.arange(0.0, 1.01, 0.2), 1))
     ax.set_xlabel("decision threshold", fontsize=9, color=TEXT_SECONDARY)
     ax.set_ylabel("score", fontsize=9, color=TEXT_SECONDARY)
-    ax.set_title(f"Threshold sweep — local Hinglish test split (n={len(rows)})",
+    ax.set_title(f"Threshold sweep: local Hinglish test split (n={len(rows)})",
                  loc="left", fontsize=12, color=TEXT_PRIMARY, pad=10)
     ax.legend(loc="lower left", frameon=False, fontsize=9,
               labelcolor=TEXT_SECONDARY)

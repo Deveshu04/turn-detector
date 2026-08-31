@@ -1,7 +1,7 @@
 """Waveform-level augmentations for turn detection.
 
 The two augmentations that teach "silence != done":
-  - trailing_silence: appended to ANY clip without changing its label — a
+  - trailing_silence: appended to ANY clip without changing its label. A
     finished speaker followed by silence is still finished, an unfinished one
     is still unfinished.
   - pause_cut: truncate a COMPLETE utterance at a speech-active point and

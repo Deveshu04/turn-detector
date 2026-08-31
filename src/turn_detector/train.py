@@ -1,11 +1,11 @@
 """Training, evaluation, and ONNX export for turn-detection experiments.
 
 Step-based training (sampler draws with replacement, so batches are iid and a
-mid-run resume just continues from the saved step — no epoch bookkeeping).
+mid-run resume just continues from the saved step, with no epoch bookkeeping).
 Checkpoints every cfg.checkpoint_every_steps to <out_dir>/ckpt_last.pt; a
 killed Kaggle session loses at most that many steps. Resume is automatic when
 the checkpoint's config hash matches. Pass `time_budget_minutes` to have the
-run end itself at the next checkpoint before Kaggle's session wall — a commit
+run end itself at the next checkpoint before Kaggle's session wall: a commit
 run that is killed by the wall publishes no output at all.
 
 Final artifacts in out_dir: ckpt_best.pt, model_fp32.onnx, model_int8.onnx,
@@ -13,9 +13,6 @@ metrics.json.
 
 When cfg.kd_teacher is set the loss is blended with a frozen teacher's soft
 targets (E5); `teacher_dir` must then point at that experiment's ckpt_best.pt.
-
-Note for security scanners: `model.eval()` below is PyTorch's inference-mode
-switch, not code evaluation.
 """
 
 import json
@@ -115,7 +112,7 @@ def slice_metrics(rows: pl.DataFrame, labels: np.ndarray, probs: np.ndarray,
         "hinglish": compute(lang == "hinglish"),
         # E6's prep adds a multilingual training tail whose manifest language is
         # the raw ISO code; the v3.2 test split is EN+HI only, so this slice is
-        # n=0 there by construction — reported rather than hidden.
+        # n=0 there by construction, reported rather than hidden.
         "multilingual_other": compute(
             ~np.isin(lang, ("english", "hindi", "hinglish"))),
         "filler": compute(midf | endf),
@@ -169,9 +166,8 @@ def save_ckpt(path: Path, model, opt, sched, scaler, step, best_val_auc, cfg_has
 def load_teacher(cfg: ExperimentConfig, teacher_dir: str | None, device: str):
     """Frozen teacher for distillation: <teacher_dir>/ckpt_best.pt.
 
-    Required — never optional — whenever cfg.kd_teacher is set: silently
-    training a "distilled" student against no teacher would burn a GPU session
-    and produce a run whose name lies about what it is.
+    Required whenever cfg.kd_teacher is set: a "distilled" student trained
+    against no teacher produces a run whose name lies about what it is.
     """
     if not teacher_dir:
         raise ValueError(
@@ -206,7 +202,7 @@ def train(cfg: ExperimentConfig, sources: dict, out_dir: str,
     wall-clock has elapsed, returning {"status": "time_budget_reached", ...}
     without final eval/export. Kaggle publishes no output from a commit run
     that hits the 12 h wall, so a run that would overrun must end itself.
-    Not part of cfg.config_hash() — resuming with a different budget is fine.
+    Not part of cfg.config_hash(), so resuming with a different budget is fine.
 
     teacher_dir: directory holding cfg.kd_teacher's ckpt_best.pt. Mandatory
     when cfg.kd_teacher is set, ignored otherwise.
@@ -256,9 +252,9 @@ def train(cfg: ExperimentConfig, sources: dict, out_dir: str,
     def batch_loss(mel, label):
         """Hard-label BCE, blended with the teacher's soft targets for KD.
 
-        The teacher sees the identical (augmented) mel batch the student does —
-        standard for response-based distillation, and it means the soft target
-        already accounts for the pause/noise/speed augmentation applied here.
+        The teacher sees the identical (augmented) mel batch the student does,
+        so the soft target already accounts for the pause/noise/speed
+        augmentation applied here.
         """
         logits = model(mel)
         hard = loss_fn(logits, label)
@@ -290,7 +286,7 @@ def train(cfg: ExperimentConfig, sources: dict, out_dir: str,
                 best_val_auc = max(best_val_auc, float(b.get("val_auc", 0.0)))
             print(f"resumed from step {step} (best val AUC {best_val_auc:.4f})")
         else:
-            print("checkpoint config hash mismatch — starting fresh")
+            print("checkpoint config hash mismatch, starting fresh")
 
     history = []
     t_start = time.time()
@@ -300,7 +296,7 @@ def train(cfg: ExperimentConfig, sources: dict, out_dir: str,
                 and (time.time() - t_start) / 60.0 >= time_budget_minutes)
 
     def budget_stop(step: int) -> dict:
-        print(f"TIME BUDGET REACHED at step {step}/{total_steps} — "
+        print(f"TIME BUDGET REACHED at step {step}/{total_steps}: "
               f"outputs saved; resume next run", flush=True)
         return {"experiment": cfg.name, "status": "time_budget_reached",
                 "step": step, "total_steps": total_steps}

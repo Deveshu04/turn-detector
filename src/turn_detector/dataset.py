@@ -2,7 +2,7 @@
 
 Works identically on Kaggle (prep-notebook output + hinglish-synth dataset)
 and locally (small subsets, unit tests). Multiple sources are concatenated;
-each manifest row needs: id, path, label, language, split — optional:
+each manifest row needs: id, path, label, language, split. Optional:
 midfiller, endfiller, synthetic, kind, source.
 
 Augmentation policy (train split only) comes from ExperimentConfig. pause_cut

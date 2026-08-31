@@ -79,7 +79,7 @@ def test_time_budget_stops_early_and_leaves_a_resumable_checkpoint(
 
 
 def random_whisper_turn() -> WhisperTinyTurn:
-    """Whisper-tiny *architecture* with random weights — no hub download."""
+    """Whisper-tiny *architecture* with random weights, no hub download."""
     from transformers import WhisperConfig, WhisperModel
     encoder = WhisperModel(WhisperConfig()).encoder    # tiny dims by default
     return WhisperTinyTurn(truncate_whisper_encoder(encoder))
@@ -114,7 +114,7 @@ def test_distillation_smoke(tiny_dataset, tmp_path, monkeypatch):
     assert json.loads((out / "metrics.json").read_text())["experiment"] == "kd"
     assert (out / "ckpt_best.pt").exists()
 
-    # the teacher is not optional: a "distilled" run without one is a lie
+    # the teacher is not optional
     with pytest.raises(ValueError, match="teacher_dir"):
         train(cfg, sources, str(tmp_path / "run_kd_noteacher"), device="cpu",
               steps_per_epoch=1, num_workers=0)
@@ -152,7 +152,7 @@ def test_config_hash_ignores_cosmetic_fields():
         name="x", notes="totally different note",
         checkpoint_every_steps=17).config_hash()
     assert base.config_hash() != ExperimentConfig(name="x", seed=1).config_hash()
-    # ...but distillation settings define the experiment: a checkpoint trained
+    # but distillation settings define the experiment: a checkpoint trained
     # against another teacher/temperature must not be resumable as this one
     assert base.config_hash() != ExperimentConfig(
         name="x", kd_teacher="e2_hinglish_aug").config_hash()

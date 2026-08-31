@@ -5,7 +5,7 @@ Usage:  python -m tools.build_space
 Copies the Gradio demo, the torch-free inference package (+ bundled mel
 filters), the int8 ONNX model(s) and the example clips into space/, then writes
 requirements.txt and a README.md carrying HF Spaces front matter. The distilled
-`model_tinymel_int8.onnx` (+ `metrics_tinymel.json`) is included when present —
+`model_tinymel_int8.onnx` (+ `metrics_tinymel.json`) is included when present;
 the demo's model dropdown lists whatever shipped.
 
 Idempotent: space/ is wiped and recreated on every run, so it is a pure build
@@ -15,7 +15,7 @@ artifact (gitignored). Deploy with e.g.
 
 The layout mirrors what demo/app.py already probes for: app.py at the root, a
 sibling turn_detector/ package (added to sys.path), model_int8.onnx next to
-app.py and examples/*.flac — so no source edits are needed.
+app.py and examples/*.flac, so no source edits are needed.
 """
 
 import shutil
@@ -69,7 +69,7 @@ short_description: Done speaking, or just pausing? Hinglish turn detection
 # 🎙️ Tiny Hinglish Turn Detector
 
 Given the last 8 seconds of speech, this model decides whether the speaker is
-**done talking** or **just pausing** — the call a voice agent has to make before
+**done talking** or **just pausing**: the call a voice agent has to make before
 it starts replying. It is tuned for **Indian Hinglish**: code-switching, filler
 words (*haan, matlab, accha, toh*), trailing conjunctions (*aur…*) and
 mid-thought pauses.
@@ -77,14 +77,14 @@ mid-thought pauses.
 ## Usage
 
 1. **Record** with the microphone or **upload** a clip (or click one of the
-   examples). Any sample rate / channel count works — it is resampled to 16 kHz
+   examples). Any sample rate / channel count works; it is resampled to 16 kHz
    mono.
 2. Hit **Detect turn**. Recordings also fire automatically when you stop.
 3. **Decision threshold** slides the complete/incomplete cutoff; lower values
    make the agent more eager to answer, higher values make it wait longer.
 
 You get back the verdict, P(complete) vs P(incomplete), the CPU latency split
-(mel extraction + model) and a **streaming simulation** — P(complete)
+(mel extraction + model) and a **streaming simulation**: P(complete)
 re-evaluated every 0.24 s as the clip "plays in", so you can watch the
 probability dip on a filler or a mid-thought pause and recover once the sentence
 actually lands.
@@ -101,7 +101,7 @@ floor for you in the second case even though both clips end in silence.
   `turn_detector/mel_filters.npz`, the STFT is plain numpy.
 - `MODEL_PATH` env var overrides the bundled model.
 
-This Space is a build artifact — regenerate it from the project repo with
+This Space is a build artifact; regenerate it from the project repo with
 `python -m tools.build_space`.
 """
 
@@ -116,7 +116,7 @@ def main() -> None:
     if missing:
         raise FileNotFoundError(
             "missing source file(s): " + ", ".join(missing)
-            + "\n(train/export first — models/model_int8.onnx comes from the "
+            + "\n(train/export first: models/model_int8.onnx comes from the "
               "Kaggle run, see KAGGLE_RUNBOOK.md)"
         )
 
@@ -134,7 +134,7 @@ def main() -> None:
             copy(ROOT / src, SPACE / dst)
             written.append(SPACE / dst)
         else:
-            print(f"note: {src} absent — Space ships without it")
+            print(f"note: {src} absent, Space ships without it")
 
     ex_dir, pattern, ex_dst = EXAMPLES_GLOB
     examples = sorted((ROOT / ex_dir).glob(pattern)) if (ROOT / ex_dir).exists() else []
@@ -142,7 +142,7 @@ def main() -> None:
         copy(src, SPACE / ex_dst / src.name)
         written.append(SPACE / ex_dst / src.name)
     if not examples:
-        print(f"warning: no {pattern} under {ex_dir}/ — Space ships without examples")
+        print(f"warning: no {pattern} under {ex_dir}/, Space ships without examples")
 
     for name, text in (("requirements.txt", REQUIREMENTS), ("README.md", README)):
         (SPACE / name).write_text(text, encoding="utf-8")

@@ -29,7 +29,7 @@ def split_of(sentence_id: str) -> str:
     sentence_id is `s{template_idx:03d}_{combo}`; hashing the whole thing put
     slot-variants of one template (near-identical wording) in different splits,
     which leaks train text into val/test. Hashing only the `s###` prefix keeps
-    every variant of a template — and its cut/tail children — in one split.
+    every variant of a template, and its cut/tail children, in one split.
     """
     template = sentence_id.split("_")[0]
     h = int(hashlib.md5((SEED_SALT + template).encode()).hexdigest(), 16) % 100

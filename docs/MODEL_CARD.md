@@ -20,7 +20,7 @@ metrics:
   - roc_auc
 ---
 
-# turn-detector — tiny Hinglish turn detection
+# turn-detector: tiny Hinglish turn detection
 
 Given the last 8 seconds of a user's speech, this model returns
 **P(turn complete)**: is the speaker done, or just pausing? It is an
@@ -33,15 +33,15 @@ filler words and trailing conjunctions).
   2-layer MLP head. **7,885,953 parameters.**
 - **Artifact:** `model_int8.onnx`, **8.5 MB** (dynamic uint8 weight
   quantization; fp32 ONNX is 31.58 MB).
-- **Input:** log-mel `(1, 80, 800)` — Whisper's exact feature math over 128,000
+- **Input:** log-mel `(1, 80, 800)`, Whisper's exact feature math over 128,000
   samples of 16 kHz mono, **right-aligned** (last 8 s kept, shorter clips
   left-padded).
 - **Output:** one logit; `sigmoid(logit)` = P(turn complete).
 - **Decision threshold: 0.50 for `model_int8.onnx`, 0.63 for `model_fp32.onnx`.**
   The int8 0.50 is a calibrated value that happens to land on the framework
-  default, not the default itself — see [Thresholds](#thresholds) below for why
+  default, not the default itself. See [Thresholds](#thresholds) below for why
   the two files differ.
-- **Runtime:** numpy + onnxruntime only. No torch, no transformers — the mel
+- **Runtime:** numpy + onnxruntime only. No torch, no transformers: the mel
   filterbank ships as a bundled `.npz`.
 
 ### Two variants ship
@@ -58,7 +58,7 @@ The distilled variant is the same 8 s log-mel input and the same single-logit
 output, so it is a drop-in swap: a stride-2 Conv1d stem, three depthwise-separable
 Conv1d blocks and a BiGRU(128) in place of the Whisper encoder, trained against
 the frozen Whisper model's soft outputs (α = 0.3, T = 2.0). It runs in **~14 ms**
-against ~91 ms on the same laptop CPU and costs 4.2 accuracy points overall —
+against ~91 ms on the same laptop CPU and costs 4.2 accuracy points overall, and
 notably more on Hinglish (8.0 points), so prefer the accurate model whenever the
 budget allows. Its metrics live in `metrics_tinymel.json`.
 
@@ -72,7 +72,7 @@ thought finish", which is the question VAD cannot answer.
 
 It is designed to hold the floor through mid-thought pauses, fillers (*haan,
 matlab, accha, yaar, umm*) and dangling conjunctions (*…aur*, *…kyunki*,
-*…lekin*), and to correctly release on complete Hinglish sentences — including
+*…lekin*), and to correctly release on complete Hinglish sentences, including
 ones ending in a post-verb adverb (*"…bahut zyada hai **aaj**."*), which is the
 construction an English-trained baseline gets catastrophically wrong.
 
@@ -109,7 +109,7 @@ streaming view of how the decision evolves as audio arrives:
 curve = detector.sliding_probs(wav, step_s=0.24)   # [{"t": 0.24, "prob": ...}, ...]
 ```
 
-The class is torch-free — `numpy` and `onnxruntime` are the only hard
+The class is torch-free: `numpy` and `onnxruntime` are the only hard
 dependencies.
 
 ## Thresholds
@@ -183,7 +183,7 @@ Two results worth stating explicitly, because they explain what ships:
   Hinglish AUC 0.949 → 0.962. E5 also trains on 2.4× the rows E3 saw, so the two
   effects are not separated.
 - **E6 trains on 111,509 rows** (English uncapped plus a 21-language tail, 2.4×)
-  and beats this model nearly everywhere — overall, English, `human_audio` — while
+  and beats this model nearly everywhere (overall, English, `human_audio`) while
   **losing on Hinglish** (0.938 vs 0.951; AUC 0.963 vs 0.986). The synthetic
   Hinglish corpus stayed the same size, so its share of training fell from 4.6%
   to 1.9% and its effect was diluted. Since Hinglish is the target domain, E6 is
@@ -208,7 +208,7 @@ int8 verdicts track fp32, whose Hinglish accuracy is 0.951.
 
 ### Robustness to trailing silence
 
-Appending silence must not change the verdict — this is the property that
+Appending silence must not change the verdict, and this is the property that
 determines whether an agent interrupts. Measured on the 225 Hinglish clips
 (int8), against an otherwise identical model trained without pause augmentation:
 
@@ -225,7 +225,7 @@ does not predict production behaviour for this task.
 
 ### int8 vs fp32
 
-| | AUC — fp32, full test (n=9,329) | AUC — int8, subset (n=2,000) |
+| | AUC, fp32, full test (n=9,329) | AUC, int8, subset (n=2,000) |
 |---|---|---|
 | overall | 0.983 | 0.978 |
 | distilled variant | 0.959 | 0.963 |
@@ -237,7 +237,7 @@ model (and is flat for the distilled one). fp32 ONNX matches torch to
 max |Δprob| = 1.19e-07.
 
 Quantization costs **ranking quality almost nothing and calibration quite a lot**.
-Scored at the fp32 threshold of 0.63, the int8 subset accuracy is 0.887 — which
+Scored at the fp32 threshold of 0.63, the int8 subset accuracy is 0.887, which
 looks like a quantization penalty but is not one, since the AUC is intact. At the
 decision-matched threshold of 0.50 the int8 model reproduces fp32 verdicts on
 99.7% of the calibration clips. Use 0.50 with the int8 file.
@@ -253,14 +253,14 @@ decision-matched threshold of 0.50 the int8 model reproduces fp32 verdicts on
 | p50 total, 4 threads (dev laptop) | ~59 ms | ~18 ms |
 
 The mel frontend costs a fixed ~8 ms either way, which is why it dominates the
-distilled model's budget and is a rounding error in this one — and why the small
+distilled model's budget and is a rounding error in this one, and why the small
 model is *slower* at 4 threads than at 1 (too little work to amortize the thread
 handoff).
 
 Laptop measurements vary about 35% between sessions with thermal and power
 state; an earlier session on the same machine measured ~126 ms single-threaded.
-Server CPUs are several times faster — pipecat's smart-turn v3 reports ~12 ms
-for the same encoder class — so treat these as a conservative ceiling.
+Server CPUs are several times faster (pipecat's smart-turn v3 reports ~12 ms
+for the same encoder class), so treat these as a conservative ceiling.
 
 ## Training data
 
@@ -291,7 +291,9 @@ model reported here was trained.
 
 ## Training procedure
 
-Kaggle T4, ~10.6 minutes, mixed precision. AdamW with a split learning rate
+Kaggle T4, ~10.6 minutes, mixed precision. Total training compute for the whole
+project, all six runs behind every table on this card, is **101.9 T4 minutes
+(1.70 hours)** on a free Kaggle account. AdamW with a split learning rate
 (encoder 1e-5, head 1e-4), weight decay 0.01, 5% warmup then cosine decay,
 gradient clipping 1.0, batch size 64, 4 epochs over 46,908 rows, seed 42.
 Best validation AUC 0.984.
@@ -300,10 +302,10 @@ Augmentation, applied to the training split only:
 
 | augmentation | p | effect on label |
 |---|---|---|
-| `pause_cut` — truncate a **complete** utterance at a speech-active point (40–85% of its active span) and append 0.2–1.2 s silence | 0.15 | flips to incomplete |
-| `trailing_silence` — append 0.2–1.2 s silence to any clip | 0.50 | preserved |
-| `noise` — additive Gaussian at 10–30 dB SNR | 0.25 | preserved |
-| `speed` — resample at 0.9–1.1× | 0.25 | preserved |
+| `pause_cut`: truncate a **complete** utterance at a speech-active point (40–85% of its active span) and append 0.2–1.2 s silence | 0.15 | flips to incomplete |
+| `trailing_silence`: append 0.2–1.2 s silence to any clip | 0.50 | preserved |
+| `noise`: additive Gaussian at 10–30 dB SNR | 0.25 | preserved |
+| `speed`: resample at 0.9–1.1× | 0.25 | preserved |
 
 The sampler oversamples complete clips by `1/(1 − p_cut)` so that batches are
 still balanced *after* `pause_cut` flips labels on the fly.
@@ -312,9 +314,9 @@ Export: `torch.onnx.export` at opset 17 with static batch 1, then
 `onnxruntime.quantization.quantize_dynamic` (`QuantType.QUInt8`).
 
 **The distilled variant** (`model_tinymel_int8.onnx`, `e5_distill`) uses the same
-augmentation recipe on an expanded prep — 111,509 train rows: English uncapped,
+augmentation recipe on an expanded prep of 111,509 train rows (English uncapped,
 all Hindi, a 21-language tail capped at 850 per (language, label), plus the same
-2,157 synthetic Hinglish clips — for 8 epochs (head LR 3e-4), 32.1 minutes on a
+2,157 synthetic Hinglish clips) for 8 epochs (head LR 3e-4), 32.1 minutes on a
 T4, best validation AUC 0.963. Its loss blends the hard label with this model's
 frozen soft outputs on the identical augmented batch:
 `0.3·BCE(student, label) + 0.7·BCE(student/T, σ(teacher/T))` at `T = 2.0`.
@@ -325,7 +327,7 @@ frozen soft outputs on the identical augmented batch:
   small.** The 0.951 comes from edge-tts audio. A 30-clip single-speaker
   phone-microphone set (fresh sentences, pre-registered thresholds) measured
   the real-world gap directly: **0.800 accuracy / AUC 0.942**, with 15/16
-  incompletes correct and 1/16 early-fires after a 1-second real pause — the
+  incompletes correct and 1/16 early-fires after a 1-second real pause. The
   errors sit almost entirely on complete sentences judged "still speaking"
   (the model waits rather than interrupts). One speaker and n=30 is
   directional evidence only; broader real code-switched evaluation remains
@@ -345,11 +347,11 @@ frozen soft outputs on the identical augmented batch:
   quantization shifts it again. Retune on your own validation data against the
   exact `.onnx` you serve, especially after any requantization. The
   decision-matching calibration behind the int8 0.50 was measured on **600
-  held-in synthetic clips for this model only** — it says nothing about agreement
+  held-in synthetic clips for this model only**: it says nothing about agreement
   on real human audio, and it was not derived for the distilled variant.
 - **The distilled variant inherits this model's biases by construction.** 70% of
-  its training signal is this model's soft outputs, so every prior encoded here —
-  including everything learned from four TTS voices and 89 templates — transfers
+  its training signal is this model's soft outputs, so every prior encoded here,
+  including everything learned from four TTS voices and 89 templates, transfers
   to it. Its numbers are not independent evidence about those priors. A student
   cannot correct a teacher's systematic error; it can only fail to reach it,
   which is what its flat Hinglish accuracy (0.871, against the teacher's 0.951)
@@ -363,8 +365,8 @@ frozen soft outputs on the identical augmented batch:
   latency; behaviour under repeated streaming calls as a pause lengthens;
   server-hardware latency.
 - **Dataset licensing.** smart-turn-data v3.2 aggregates several upstream
-  corpora under their own licenses. Those per-source terms — not this card's
-  MIT line — govern redistribution and commercial use of models trained on it.
+  corpora under their own licenses. Those per-source terms, not this card's
+  MIT line, govern redistribution and commercial use of models trained on it.
 
 ## Citation and attribution
 

@@ -5,7 +5,7 @@ in the manifest are skipped, so rerunning after an interruption (network,
 throttling, Ctrl+C) continues where it left off.
 
 For "full" jobs, incomplete "cut" variants are derived from the SAME audio by
-slicing at TTS word-boundary timestamps — acoustically natural mid-sentence
+slicing at TTS word-boundary timestamps: acoustically natural mid-sentence
 stops with zero extra TTS calls.
 
 Run:  python -m synth.tts_generate [--limit N] [--concurrency 5]

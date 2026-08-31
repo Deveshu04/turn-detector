@@ -75,7 +75,7 @@ SLOTS = {
     ],
 }
 
-# (deva, latin, domain) — complete turns.
+# Complete turns, as (deva, latin, domain) triples.
 TEMPLATES = [
     # ---------- logistics / ecommerce ----------
     ("मेरा order अभी तक deliver नहीं हुआ है", "Mera order abhi tak deliver nahi hua hai", "logistics"),

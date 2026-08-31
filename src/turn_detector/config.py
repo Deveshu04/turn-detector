@@ -20,8 +20,7 @@ class ExperimentConfig:
     # knowledge distillation (empty kd_teacher = plain supervised training).
     # These stay IN config_hash: they define the experiment, and a checkpoint
     # trained against a different teacher/temperature is not resumable as this
-    # one. Switching kd_teacher therefore invalidates the old checkpoint, which
-    # is the correct behaviour.
+    # one. Switching kd_teacher invalidates the old checkpoint.
     kd_teacher: str = ""               # experiment name whose ckpt_best is the teacher
     kd_alpha: float = 0.3              # weight on hard-label BCE; 1-alpha on the soft term
     kd_temperature: float = 2.0

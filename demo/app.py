@@ -1,11 +1,11 @@
 """Gradio demo: is the speaker done, or just pausing?
 
 Record or upload speech (Hinglish welcome!), get P(turn complete), latency,
-and a "streaming view" showing how the decision evolves as the clip plays —
+and a "streaming view" showing how the decision evolves as the clip plays:
 watch the probability dip on fillers (matlab, umm...) and mid-thought pauses.
 
 Ships whichever models it finds next to the app (or in ../models): the accurate
-Whisper-tiny one and, when it exists, the distilled TinyMelNet — the dropdown
+Whisper-tiny one and, when it exists, the distilled TinyMelNet. The dropdown
 only offers models that are actually present, so the demo runs unchanged with
 just one of them.
 
@@ -113,11 +113,11 @@ def to_16k_mono(sr: int, wav: np.ndarray) -> np.ndarray:
 def analyze(audio: tuple[int, np.ndarray] | None, threshold: float,
             model_label: str = DEFAULT_MODEL):
     if audio is None:
-        return "—", None, "Record or upload a clip first.", None
+        return "-", None, "Record or upload a clip first.", None
     sr, wav = audio
     wav = to_16k_mono(sr, wav)
     if len(wav) < SR // 4:
-        return "—", None, "Clip too short (need ≥0.25 s).", None
+        return "-", None, "Clip too short (need ≥0.25 s).", None
 
     detector = get_detector(model_label)
     detector.threshold = threshold
@@ -160,7 +160,7 @@ with gr.Blocks(title="Hinglish Turn Detection") as app:
         "# 🎙️ Tiny Hinglish Turn Detector\n"
         "Speak (Hinglish, Hindi, or English) and the model decides: **done "
         "talking, or just pausing?** Try trailing off with *\"matlab…\"*, "
-        "*\"aur…\"* or a mid-thought pause — a good turn detector should wait."
+        "*\"aur…\"* or a mid-thought pause. A good turn detector should wait."
     )
     with gr.Row():
         with gr.Column(scale=1):

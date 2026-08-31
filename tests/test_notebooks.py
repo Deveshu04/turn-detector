@@ -1,8 +1,8 @@
 """Guards on the generated Kaggle notebooks.
 
-These two failure modes each cost a full Kaggle session before they show up:
+Two failure modes that only surface once a Kaggle session is already running:
 an empty `%%writefile` cell raises UsageError on the first run, and filtering
-smart-turn v3.2 on long language names ("english") silently keeps zero rows —
+smart-turn v3.2 on long language names ("english") silently keeps zero rows:
 v3.2 stores ISO-639-3 codes ("eng").
 """
 
@@ -40,7 +40,7 @@ def test_prep_filters_iso639_3_codes(notebooks):
     code = "\n".join(sources(notebooks["01_data_prep"]))
     assert '("eng", "hin")' in code
     assert '{"eng": "english", "hin": "hindi"}' in code
-    # and never the old long-name filter, which matched nothing
+    # the long-name filter matched nothing and must not come back
     assert 'not in ("english", "hindi")' not in code
 
 
@@ -60,7 +60,7 @@ def test_prep_keeps_full_english_and_a_multilingual_tail(notebooks):
     assert "OTHER_CAP_PER_LANG_LABEL = 850" in code
     # other languages keep their raw ISO code (LANG_MAP maps eng/hin only)
     assert 'lang = LANG_MAP.get(code, code)' in code
-    # ...and never land in val: model selection must stay comparable
+    # and never land in val: model selection must stay comparable
     assert 'if src == "test" and not core' in code
 
 
@@ -72,7 +72,7 @@ def test_prep_writes_audio_into_zip_shards(notebooks):
     assert 'SHARD_DIR / f"shard_{i:02d}.zip"' in code
     assert 'mode="a"' in code and "ZIP_STORED" in code
     assert 'sf.write(buf, wav, SR, format="FLAC", subtype="PCM_16")' in code
-    # ...and never the old per-file write, which is what broke publishing
+    # the per-file write is what broke publishing
     assert "sub.mkdir" not in code
     assert "AUDIO_DIR" not in code
     # the manifest path and the arcname must be the same string, or notebook 02
@@ -106,8 +106,8 @@ def test_train_extracts_prep_shards_to_tmp(notebooks):
 def test_shard_roundtrip_feeds_the_dataset_unchanged(tmp_path):
     """End-to-end path fidelity: write FLAC into shard zips the way the prep
     notebook does, extract them, and read the result through the real
-    load_manifests + TurnDataset. A mismatch between arcname and manifest
-    `path` costs a whole GPU session, so prove it here."""
+    load_manifests + TurnDataset. Guards arcname and the manifest `path`
+    against drifting apart."""
     from tools.build_notebooks import PREP_MAIN
     from turn_detector.config import EXPERIMENTS
     from turn_detector.dataset import TurnDataset, load_manifests
@@ -139,7 +139,7 @@ def test_shard_roundtrip_feeds_the_dataset_unchanged(tmp_path):
         zf.close()
     pl.DataFrame(rows).write_parquet(prep / "manifest.parquet")
 
-    # ...what notebook 02 does with the mount
+    # what notebook 02 does with the mount
     extracted = tmp_path / "prep_audio"
     shards = sorted((prep / "shards").glob("shard_*.zip"))
     assert shards, "no shard zips written"

@@ -1,4 +1,4 @@
-# turn-detector — tiny audio turn detection for Hinglish
+# turn-detector: tiny audio turn detection for Hinglish
 
 **Is the user done speaking, or just pausing?** This is a 7.9M-parameter
 audio-only classifier that takes the last 8 seconds of speech and returns
@@ -12,7 +12,7 @@ of the time (n=75); adding 2,157 synthetic code-switched training clips takes th
 **95.1% (+32.0 points)** with **zero regression** on English (0.938 → 0.938,
 n=7,820), Hindi (0.931 → 0.932, n=1,284) or the real-human slice (0.946 →
 0.947, n=5,367). Two artifacts ship, both int8 ONNX running on CPU with numpy
-and onnxruntime — no torch, no transformers: the **accurate** 8.5 MB model
+and onnxruntime, with no torch and no transformers: the **accurate** 8.5 MB model
 (93.8% overall / 95.1% Hinglish) and a **fast** 1.3 MB / ~14 ms distilled
 student at 89.6% overall, 507k parameters. The demo exposes both in a dropdown.
 
@@ -36,31 +36,31 @@ smart-turn v3.2 test split plus a template-disjoint synthetic Hinglish split.
 | **hinglish** | 225 | 0.631 | **0.951** | 0.871 | 0.871 | 0.938 |
 | filler | 2,381 | 0.912 | **0.914** | 0.856 | 0.870 | 0.915 |
 | human_audio | 5,367 | 0.946 | **0.947** | 0.877 | 0.904 | 0.954 |
-| — AUC, hinglish | 225 | 0.612 | **0.986** | 0.949 | 0.962 | 0.963 |
-| — AUC, overall | 9,329 | 0.981 | **0.983** | 0.944 | 0.959 | 0.986 |
+| AUC, hinglish | 225 | 0.612 | **0.986** | 0.949 | 0.962 | 0.963 |
+| AUC, overall | 9,329 | 0.981 | **0.983** | 0.944 | 0.959 | 0.986 |
 | params | | 7,885,953 | 7,885,953 | 507,265 | 507,265 | 7,885,953 |
 | int8 ONNX | | 8.50 MB | 8.50 MB | 1.28 MB | 1.28 MB | 8.50 MB |
 | tuned threshold (fp32) | | 0.35 | **0.63** | 0.53 | 0.57 | 0.54 |
 
-- **E1** `e1_baseline` — real English + Hindi only, no augmentation.
-- **E2** `e2_hinglish_aug` — E1 data + synthetic Hinglish + pause/silence/noise/speed augmentation. **Shipped: `models/model_int8.onnx`.**
-- **E3** `e3_tinymel_scratch` — same data as E2, 507k-param from-scratch mel-CNN + BiGRU. Superseded by E5.
-- **E4** `e4_no_pause_aug` — E2 minus pause augmentation; see below.
-- **E5** `e5_distill` — E3's architecture distilled from E2's frozen checkpoint (α 0.3, T 2.0). **+2.5 points over E3 at identical size. Shipped: `models/model_tinymel_int8.onnx`.**
-- **E6** `e6_full_data` — E2's recipe on 111,509 rows (2.4×: English uncapped, 21-language tail).
+- **E1** `e1_baseline`: real English + Hindi only, no augmentation.
+- **E2** `e2_hinglish_aug`: E1 data + synthetic Hinglish + pause/silence/noise/speed augmentation. **Shipped: `models/model_int8.onnx`.**
+- **E3** `e3_tinymel_scratch`: same data as E2, 507k-param from-scratch mel-CNN + BiGRU. Superseded by E5.
+- **E4** `e4_no_pause_aug`: E2 minus pause augmentation; see below.
+- **E5** `e5_distill`: E3's architecture distilled from E2's frozen checkpoint (α 0.3, T 2.0). **+2.5 points over E3 at identical size. Shipped: `models/model_tinymel_int8.onnx`.**
+- **E6** `e6_full_data`: E2's recipe on 111,509 rows (2.4×: English uncapped, 21-language tail).
 
 Full tables including E4: [`experiments/RESULTS.md`](experiments/RESULTS.md).
 
 **Why E6 is not shipped, despite winning on paper.** It beats E2 overall (0.943
 vs 0.938), on English (0.945 vs 0.938) and on the real-human slice (0.954 vs
-0.947, AUC 0.990) — and **loses on Hinglish** (0.938 vs 0.951, AUC 0.963 vs
+0.947, AUC 0.990), and **loses on Hinglish** (0.938 vs 0.951, AUC 0.963 vs
 0.986). The synthetic Hinglish corpus did not grow with the rest of the data, so
 its share of training fell from 4.6% to 1.9% and its influence was diluted out:
 scaling 2.4× improved the general case and degraded the target domain. Hinglish
-is the brief, so E2 stays — and is also why E2, not E6, is E5's distillation
+is the brief, so E2 stays, which is also why E2, not E6, is E5's distillation
 teacher. Details in [`experiments/REPORT.md`](experiments/REPORT.md) §5.5–5.6.
 
-### Silence stress test — why static accuracy is not enough
+### Silence stress test: why static accuracy is not enough
 
 Append silence to the 225 Hinglish test clips and re-run. Nothing about what was
 said changed, so no verdict should change. E4 scores *higher* than E2 on the
@@ -88,7 +88,7 @@ Source: [`experiments/silence_stress_test.json`](experiments/silence_stress_test
 30 fresh Hinglish clips (14 complete / 16 incomplete, sentences disjoint from
 training) recorded by a real speaker on a phone: **E2 scores 80.0% / AUC 0.942**
 at its pre-registered threshold. The gap vs the synthetic 95.1% is honest
-domain shift — but its structure is the right one for production: incomplete
+domain shift, but its structure is the right one for production: incomplete
 detection is 15/16 (trailing fillers 5/5, mid-thought stops 6/6) with **1/16
 early-fires after a 1 s real pause**, and five of six errors are completes
 called "still speaking" — the model waits too long rather than interrupting.
@@ -102,7 +102,7 @@ local (only aggregates are committed:
 # install (Python 3.12)
 uv sync
 
-# tests — 39 of them, ~1 min (add -m "not slow" to skip the ONNX export smoke)
+# tests: 39 of them, ~1 min (add -m "not slow" to skip the ONNX export smoke)
 uv run python -m pytest -q
 
 # Gradio demo on localhost: record or upload a clip, watch the streaming
@@ -129,22 +129,37 @@ fast = TurnDetector("models/model_tinymel_int8.onnx", threshold=0.57)
 point is 0.63, but int8 shifts the probabilities: **0.50 on the int8 file
 reproduces the fp32-at-0.63 decision on 99.7% of 600 held-in synthetic clips**
 (no test labels used). That resolves an apparent int8 accuracy drop as a
-calibration artifact rather than lost separability — int8 AUC 0.978 vs fp32
+calibration artifact rather than lost separability: int8 AUC 0.978 vs fp32
 0.983. `models/metrics.json` records it as `int8_threshold_decision_matched`;
 the demo and Space default to it, and to 0.57 for the distilled model.
 
 Latency, int8 ONNX on the dev laptop (onnxruntime CPU, p50 over 100 iterations,
 includes numpy mel extraction): **E2 ≈ 91 ms** single-thread, **E5 ≈ 14 ms**
 (same architecture and footprint as E3). These are laptop numbers and vary ~35%
-between sessions with thermal state — an earlier session measured the small model
-at 19 ms; server CPUs are several times faster, and pipecat's smart-turn v3
+between sessions with thermal state; an earlier session measured the small model
+at 19 ms. Server CPUs are several times faster, and pipecat's smart-turn v3
 reports ~12 ms for the same encoder class. See
 [`experiments/REPORT.md`](experiments/REPORT.md) §6.
 
-Training runs on Kaggle (free T4, ~10–32 min per experiment) — see
+Training runs on Kaggle (free T4, ~10–32 min per experiment); see
 [`KAGGLE_RUNBOOK.md`](KAGGLE_RUNBOOK.md). The expanded E5/E6 prep ships its audio
 as 64 ZIP shards because Kaggle's kernel-output publishing silently fails past
 ~100k loose files; the runbook documents the failure mode and the fix.
+
+## Compute
+
+All six experiments together cost **101.9 minutes of T4 time (1.70 hours)** on a
+free Kaggle account, under 6% of one week's free GPU quota. The GPU trains and
+does nothing else: the 41 GB source dataset is streamed and filtered in CPU-only
+Kaggle sessions and never stored in full, the Hinglish TTS corpus is synthesized
+locally, and quantization, ONNX parity, threshold calibration, error analysis,
+latency benchmarks, the silence stress test and the real-voice eval all run on a
+laptop CPU. Because a Kaggle run killed at the 12 h wall publishes no output at
+all, training carries a 10.5 h wall-clock budget, atomic checkpoints every 500
+steps and hard-failing resume validation, and the notebooks are generated from
+the tested library so no GPU minute is spent on code a CPU smoke test has not
+already run. Details, including the per-run breakdown and the fail-fast guards,
+in [`experiments/REPORT.md`](experiments/REPORT.md) §9.
 
 ## Repo map
 
@@ -158,7 +173,7 @@ flowchart LR
 ```
 
 ```
-src/turn_detector/     library — the single source of truth
+src/turn_detector/     library: the single source of truth
   common.py            audio constants + right-aligned 8 s windowing (torch-free)
   features.py          Whisper-exact log-mel, torch (parity-tested vs HF)
   infer.py             torch-free numpy mel + ONNX runner + benchmark()
@@ -189,13 +204,12 @@ tests/                 39 tests incl. HF feature-extractor parity + KD smoke
 
 ## Links
 
-- **HF Space (demo):** TODO — deploy with `python -m tools.build_space` then
-  `hf upload <user>/<space> space/ . --repo-type=space`
-- **HF Hub (model):** TODO — upload `models/model_int8.onnx`,
-  `models/model_fp32.onnx`, `models/model_tinymel_int8.onnx`,
-  `models/metrics.json`, `models/metrics_tinymel.json` and `docs/MODEL_CARD.md`
-- **Synthetic Hinglish dataset:** TODO — `synth/output/hinglish-synth.zip`
-  (2,469 clips / 2.07 h) currently lives as a Kaggle dataset
+- **Live demo (HF Space):** <https://huggingface.co/spaces/deveshu/hinglish-turn-detector>
+- **Model weights (HF Hub):** <https://huggingface.co/deveshu/hinglish-turn-detector>
+  (both int8 ONNX artifacts, fp32, metrics, model card)
+- **Source:** <https://github.com/Deveshu04/turn-detector>
+- **Synthetic Hinglish dataset:** fully reproducible from `synth/`
+  (2,469 clips / 2.07 h); the packaged zip is available on request
 - Experimental report: [`experiments/REPORT.md`](experiments/REPORT.md)
 - Model card: [`docs/MODEL_CARD.md`](docs/MODEL_CARD.md)
 - Training runbook: [`KAGGLE_RUNBOOK.md`](KAGGLE_RUNBOOK.md)
@@ -207,7 +221,7 @@ Approach informed by [pipecat-ai/smart-turn](https://github.com/pipecat-ai/smart
 
 Training and evaluation data: **pipecat-ai smart-turn-data v3.2**
 ([train](https://huggingface.co/datasets/pipecat-ai/smart-turn-data-v3.2-train),
-[test](https://huggingface.co/datasets/pipecat-ai/smart-turn-data-v3.2-test)) —
+[test](https://huggingface.co/datasets/pipecat-ai/smart-turn-data-v3.2-test)):
 English and Hindi subsets only. The dataset aggregates several upstream corpora
 under their own licenses; see the dataset card, whose per-source terms govern
 redistribution and commercial use of anything trained on it.
@@ -216,5 +230,5 @@ Base model: [`openai/whisper-tiny`](https://huggingface.co/openai/whisper-tiny)
 (MIT). Synthetic Hinglish audio generated with
 [edge-tts](https://github.com/rany2/edge-tts) using four Indian Microsoft neural
 voices (`hi-IN-SwaraNeural`, `hi-IN-MadhurNeural`, `en-IN-NeerjaNeural`,
-`en-IN-PrabhatNeural`) — subject to Microsoft's terms for the Edge read-aloud
+`en-IN-PrabhatNeural`), subject to Microsoft's terms for the Edge read-aloud
 service. Project code is MIT.
