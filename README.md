@@ -23,6 +23,30 @@ against 5.1% for the shipped model. Static test sets cannot see this;
 production users feel it immediately. Full write-up in
 **[`experiments/REPORT.md`](experiments/REPORT.md)**.
 
+## Live demo
+
+**<https://huggingface.co/spaces/deveshu/hinglish-turn-detector>** runs the
+detector **entirely in your browser** via onnxruntime-web (WASM): no inference
+server, and recorded audio never leaves your device. This works because the
+exported models take a raw waveform and compute the mel spectrogram *inside*
+the ONNX graph (`src/turn_detector/melgraph.py` implements the STFT as fixed
+DFT convolutions; mel parity with the training frontend is 1e-6 and test AUC is
+bit-identical to the shipped models). The page offers:
+
+- microphone, file upload, and six labelled Hinglish example clips, each chip
+  showing its ground-truth label next to the model's live verdict with a
+  match/miss mark;
+- both models in one toggle: **accurate** (Whisper-tiny, 9.3 MB) and **fast**
+  (distilled TinyMelNet, 2.0 MB, ~30 ms in-browser);
+- a decision readout in plain words (P(complete) vs the tuned threshold), a
+  threshold slider that re-scores every example live, and a streaming view of
+  P(complete) as the clip plays in.
+
+One caveat the page states itself: the model judges whether the speech *sounds*
+finished. It does not know when you pressed stop, and it leans toward waiting,
+so a finished sentence can read as "Still speaking". A local Gradio version
+with the same models lives in `demo/` (see Quickstart).
+
 ## Results
 
 Accuracy at each run's tuned threshold, fp32, on the official
@@ -102,7 +126,7 @@ local (only aggregates are committed:
 # install (Python 3.12)
 uv sync
 
-# tests: 39 of them, ~1 min (add -m "not slow" to skip the ONNX export smoke)
+# tests: 43 of them, ~1 min (add -m "not slow" to skip the ONNX export smoke)
 uv run python -m pytest -q
 
 # Gradio demo on localhost: record or upload a clip, watch the streaming
@@ -193,13 +217,16 @@ tools/
   aggregate_results.py run_*/metrics.json -> experiments/RESULTS.md
   error_analysis.py    worst errors, per-kind accuracy, threshold sweep, plots
   build_space.py       assembles a deployable torch-free HF Space at space/
+  export_webdemo.py    waveform-input ONNX exports + thresholds for webdemo/
 notebooks/kaggle/      01_data_prep.ipynb, 02_train.ipynb (generated)
+webdemo/               static browser demo (onnxruntime-web), deployed Space
 experiments/           REPORT.md, RESULTS.md, silence_stress_test.json, run_*/
 models/                shipped artifacts: E2 fp32+int8 ONNX, E5 distilled int8,
                        metrics.json (incl. int8_threshold_decision_matched)
 demo/                  Gradio app (accurate/fast dropdown) + example clips
 docs/MODEL_CARD.md     HF model card
-tests/                 39 tests incl. HF feature-extractor parity + KD smoke
+tests/                 43 tests incl. HF feature-extractor parity, KD smoke,
+                       and mel-in-graph parity for the browser exports
 ```
 
 ## Links
