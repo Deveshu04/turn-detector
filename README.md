@@ -110,15 +110,18 @@ Source: [`experiments/silence_stress_test.json`](experiments/silence_stress_test
 ### Real-voice spot check (single speaker, phone mic)
 
 30 fresh Hinglish clips (14 complete / 16 incomplete, sentences disjoint from
-training) recorded by a real speaker on a phone: **E2 scores 80.0% / AUC 0.942**
+training) **recorded by the author in their own voice on a phone**, covering the
+same five categories as the synthetic corpus: **E2 scores 80.0% / AUC 0.942**
 at its pre-registered threshold. The gap vs the synthetic 95.1% is honest
 domain shift, but its structure is the right one for production: incomplete
 detection is 15/16 (trailing fillers 5/5, mid-thought stops 6/6) with **1/16
 early-fires after a 1 s real pause**, and five of six errors are completes
 called "still speaking" — the model waits too long rather than interrupting.
-Single speaker and n=30, so directional evidence, not a benchmark; audio stays
-local (only aggregates are committed:
-[`experiments/real_voice_eval.json`](experiments/real_voice_eval.json)).
+Single speaker and n=30, so directional evidence, not a benchmark. The
+recordings themselves are personal voice data and stay out of the repository by
+design; only aggregates are committed
+([`experiments/real_voice_eval.json`](experiments/real_voice_eval.json)), and
+the raw clips can be shared privately on request.
 
 ## Quickstart
 

@@ -324,9 +324,10 @@ frozen soft outputs on the identical augmented batch:
 ## Bias, risks and limitations
 
 - **The main Hinglish evaluation is TTS-synthetic; the real-voice check is
-  small.** The 0.951 comes from edge-tts audio. A 30-clip single-speaker
-  phone-microphone set (fresh sentences, pre-registered thresholds) measured
-  the real-world gap directly: **0.800 accuracy / AUC 0.942**, with 15/16
+  small.** The 0.951 comes from edge-tts audio. A 30-clip set recorded by the
+  author in their own voice on a phone (fresh sentences, pre-registered
+  thresholds; the audio is personal voice data, kept private and available on
+  request) measured the real-world gap directly: **0.800 accuracy / AUC 0.942**, with 15/16
   incompletes correct and 1/16 early-fires after a 1-second real pause. The
   errors sit almost entirely on complete sentences judged "still speaking"
   (the model waits rather than interrupts). One speaker and n=30 is

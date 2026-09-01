@@ -556,9 +556,10 @@ control that makes E5's number meaningful.
 
 ### 5.7 Real-voice spot check: the errors point the right way
 
-Every Hinglish number above comes from TTS audio, so we recorded a small real
-set: 30 clips (14 complete / 16 incomplete) spoken by one Indian speaker into a
-phone microphone, using fresh sentences disjoint from the training templates,
+Every Hinglish number above comes from TTS audio, so the author recorded a
+small real set in their own voice: 30 clips (14 complete / 16 incomplete)
+spoken into a phone microphone, using fresh sentences disjoint from the
+training templates,
 covering the same five categories as the synthetic corpus (complete,
 mid-sentence filler, trailing conjunction, trailing filler, mid-thought stop).
 Scored at each model's pre-registered threshold; nothing was tuned on these clips.
