@@ -40,10 +40,17 @@
 
   var el = {};
   ['modelSeg', 'thresh', 'threshVal', 'engine', 'engineText', 'recBtn', 'recState',
-   'recHint', 'file', 'chips', 'msg', 'verdict', 'verdictText', 'verdictSrc',
+   'recHint', 'file', 'chips', 'msg', 'result', 'verdictText', 'verdictSrc',
    'probNum', 'meter', 'meterFill', 'meterNeedle', 'meterGate', 'gateFlag',
-   'sLat', 'sSize', 'sWin', 'sDur', 'modelNote', 'wave', 'chart',
+   'relation', 'sLat', 'sSize', 'sWin', 'sDur', 'modelNote', 'wave', 'chart',
    'streamNote'].forEach(function (k) { el[k] = document.getElementById(k); });
+
+  // 'empty' before any audio, 'work' while a clip is being analysed, 'done'
+  // once a probability for THIS clip has landed.
+  var phase = 'empty';
+  // probabilities per model per example file, so the chip marks can be
+  // re-derived whenever the threshold moves
+  var chipProbs = {};
 
   /* ------------------------------------------------------------- helpers */
 
@@ -207,20 +214,46 @@
 
   function renderVerdict(flash) {
     var v = renderMeter();
-    if (v === 'none') {
-      el.verdict.dataset.v = 'none';
-      el.verdictText.textContent = 'No audio yet';
-      el.verdictSrc.textContent = 'Pick an example, upload a file, or record';
+
+    if (phase === 'work') {
+      el.result.dataset.v = 'work';
+      el.verdictText.textContent = 'Listening back';
+      el.probNum.textContent = '...';
+      el.relation.textContent = 'Running the model on this clip.';
+      renderChips();
       return;
     }
-    var was = el.verdict.dataset.v;
-    el.verdict.dataset.v = v;
-    el.verdictText.textContent = v === 'done' ? 'Done speaking' : 'Still speaking';
-    if (flash || was !== v) {
-      el.verdict.classList.remove('flash');
-      void el.verdict.offsetWidth;
-      el.verdict.classList.add('flash');
+    if (v === 'none') {
+      el.result.dataset.v = 'none';
+      el.verdictText.textContent = 'No audio yet';
+      el.verdictSrc.textContent = 'Pick an example, upload a file, or record';
+      el.relation.textContent = 'Load some audio to get a reading.';
+      renderChips();
+      return;
     }
+
+    var was = el.result.dataset.v;
+    el.result.dataset.v = v;
+    el.verdictText.textContent = v === 'done' ? 'Done speaking' : 'Still speaking';
+    el.relation.textContent = 'P(complete) ' + lastProb.toFixed(3) +
+      (v === 'done' ? ' is at or above the ' : ' is below the ') + threshold.toFixed(2) +
+      ' threshold, so the model would ' +
+      (v === 'done' ? 'hand the turn over now.' : 'keep waiting for more speech.');
+    renderChips();
+    if (flash || was !== v) {
+      el.result.classList.remove('flash');
+      void el.result.offsetWidth;
+      el.result.classList.add('flash');
+    }
+  }
+
+  // Bring the answer on screen when the user supplied their own audio and may
+  // be scrolled down at the source panel.
+  function revealResult() {
+    var box = el.result.getBoundingClientRect();
+    if (box.top >= 0 && box.bottom <= window.innerHeight) return;
+    var smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    el.result.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
   }
 
   function renderModelStats() {
@@ -513,7 +546,7 @@
     return step();
   }
 
-  function analyse(source) {
+  function analyse(source, reveal) {
     if (!clip) return Promise.resolve();
     var gen = ++streamGen;
     busy = true;
@@ -521,14 +554,26 @@
     el.streamNote.textContent = '';
     drawChart();
     status('busy', 'Running');
-    el.verdictSrc.textContent = source;
 
+    // Drop the previous clip's numbers before relabelling the source, so the
+    // readout can never show a stale verdict attributed to the new audio.
+    lastProb = null;
+    phase = 'work';
+    el.sLat.textContent = '--';
+    el.sDur.textContent = clip.duration.toFixed(2) + ' s';
+    el.verdictSrc.textContent = source;
+    renderVerdict(false);
+
+    var file = clipFile;
     return infer(activeId, windowAt(clip.pcm, clip.pcm.length)).then(function (r) {
       if (gen !== streamGen) return;
       lastProb = r.p;
+      phase = 'done';
+      if (file) chipProbs[activeId + '|' + file] = r.p;
       el.sLat.textContent = r.ms.toFixed(0) + ' ms';
       el.sDur.textContent = clip.duration.toFixed(2) + ' s';
       renderVerdict(true);
+      if (reveal) revealResult();
       return runStream(gen);
     }).catch(function (err) {
       if (gen !== streamGen) return;
@@ -539,14 +584,14 @@
     });
   }
 
-  function loadBuffer(arrayBuffer, source) {
+  function loadBuffer(arrayBuffer, source, reveal) {
     note('');
     status('busy', 'Decoding audio');
     return decodeToPcm(arrayBuffer).then(function (pcm) {
       if (!pcm.length) throw new Error('Decoded to zero samples.');
       clip = { pcm: pcm, duration: pcm.length / SR, source: source };
       drawWave();
-      return analyse(source);
+      return analyse(source, reveal);
     }).catch(function (err) {
       status('err', 'Could not decode');
       note('Could not decode that audio. ' + (err && err.message ? err.message : ''));
@@ -575,6 +620,31 @@
     });
   }
 
+  // Derive each chip's match mark from the stored probability, so dragging the
+  // threshold updates every example that has already been run.
+  function renderChips() {
+    Array.prototype.forEach.call(el.chips.querySelectorAll('.chip'), function (b) {
+      var file = b.dataset.file;
+      var p = chipProbs[activeId + '|' + file];
+      var mark = b.querySelector('.cmark');
+      var says = b.querySelector('.cmodel');
+      if (p === undefined) {
+        b.dataset.run = '0';
+        says.textContent = 'model: not run yet';
+        mark.textContent = '';
+        mark.removeAttribute('data-m');
+        return;
+      }
+      b.dataset.run = '1';
+      var verdict = p >= threshold ? 'complete' : 'incomplete';
+      var hit = verdict === labelOf(file);
+      says.textContent = 'model: ' + p.toFixed(3) + ', ' +
+        (verdict === 'complete' ? 'done' : 'still');
+      mark.textContent = hit ? '✓ match' : '✗ miss';
+      mark.dataset.m = hit ? 'hit' : 'miss';
+    });
+  }
+
   function buildChips() {
     EXAMPLES.forEach(function (file) {
       var lab = labelOf(file);
@@ -582,11 +652,21 @@
       b.type = 'button';
       b.className = 'chip';
       b.dataset.file = file;
+      b.dataset.run = '0';
       b.setAttribute('aria-pressed', 'false');
-      b.appendChild(span('cn', fmtName(file)));
+
+      var r1 = span('crow', '');
+      r1.appendChild(span('cn', fmtName(file)));
       var cl = span('cl', lab);
       cl.dataset.l = lab;
-      b.appendChild(cl);
+      r1.appendChild(cl);
+
+      var r2 = span('crow crow2', '');
+      r2.appendChild(span('cmodel', 'model: not run yet'));
+      r2.appendChild(span('cmark', ''));
+
+      b.appendChild(r1);
+      b.appendChild(r2);
       // a new pick preempts any curve still being computed
       b.addEventListener('click', function () { loadExample(file); });
       el.chips.appendChild(b);
@@ -613,6 +693,7 @@
         activeId = id;
         lastProb = null;
         curve = null;
+        phase = clip ? 'work' : 'empty';
         el.sLat.textContent = '--';
         renderModelStats();
         setThreshold(models[id].threshold, true);
@@ -703,7 +784,9 @@
         var blob = new Blob(recChunks, { type: recorder.mimeType || 'audio/webm' });
         if (!blob.size) { note('Nothing was captured.'); return; }
         markChip(null);
-        blob.arrayBuffer().then(function (buf) { return loadBuffer(buf, 'Microphone'); });
+        blob.arrayBuffer().then(function (buf) {
+          return loadBuffer(buf, 'Your recording', true);
+        });
       };
       recorder.start();
       recPhase = 'recording';
@@ -762,7 +845,7 @@
       var f = el.file.files && el.file.files[0];
       if (!f) return;
       markChip(null);
-      f.arrayBuffer().then(function (buf) { return loadBuffer(buf, f.name); });
+      f.arrayBuffer().then(function (buf) { return loadBuffer(buf, f.name, true); });
       el.file.value = '';
     });
 

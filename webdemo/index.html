@@ -50,6 +50,50 @@
     </div>
   </section>
 
+  <!-- the answer, first and largest -->
+  <section class="hero" id="result" data-v="none" aria-label="Model result">
+    <span class="hero-ring" aria-hidden="true"></span>
+    <div class="hero-top">
+      <p class="lab hero-lab">Model says</p>
+      <p class="hero-src" id="verdictSrc">Pick an example, upload a file, or record</p>
+    </div>
+
+    <div class="hero-main">
+      <p class="v-text" id="verdictText" aria-live="polite">No audio yet</p>
+      <div class="hero-prob">
+        <p class="lab">P(complete)</p>
+        <p class="prob-num" id="probNum">0.000</p>
+      </div>
+    </div>
+
+    <div class="meter" id="meter">
+      <div class="meter-track">
+        <div class="meter-fill" id="meterFill"></div>
+        <div class="meter-ticks" aria-hidden="true"></div>
+        <div class="meter-needle" id="meterNeedle" aria-hidden="true"></div>
+        <div class="meter-gate" id="meterGate"><span class="gate-flag" id="gateFlag">0.50</span></div>
+      </div>
+      <div class="meter-scale" aria-hidden="true"><span>0</span><span>0.5</span><span>1</span></div>
+    </div>
+
+    <p class="relation" id="relation">Load some audio to get a reading.</p>
+
+    <p class="caveat">
+      The model hears only the audio. It judges whether your speech <em>sounds</em> finished,
+      not whether you stopped recording. Silence after you stop is not evidence that you were
+      done. It gets this wrong sometimes, and it leans toward waiting, so a finished sentence
+      can still read as "Still speaking".
+    </p>
+
+    <dl class="stats">
+      <div class="stat"><dt>Latency</dt><dd id="sLat">--</dd></div>
+      <div class="stat"><dt>Model file</dt><dd id="sSize">--</dd></div>
+      <div class="stat"><dt>Window</dt><dd id="sWin">--</dd></div>
+      <div class="stat"><dt>Clip</dt><dd id="sDur">--</dd></div>
+    </dl>
+    <p class="fineprint" id="modelNote"></p>
+  </section>
+
   <main class="grid">
 
     <section class="panel p-source">
@@ -75,55 +119,21 @@
 
       <div class="examples">
         <p class="lab">Labelled examples</p>
+        <p class="ex-note">The pill is the true label. Run one and the model verdict appears beneath it.</p>
         <div class="chips" id="chips"></div>
       </div>
 
       <p class="msg" id="msg" role="status" aria-live="polite"></p>
     </section>
 
-    <section class="panel p-read">
-      <h2 class="ptitle"><span class="num">02</span> Readout</h2>
-
-      <div class="verdict" id="verdict" data-v="none" aria-live="polite">
-        <span class="v-dot" aria-hidden="true"></span>
-        <span class="v-text" id="verdictText">No audio yet</span>
-        <span class="v-src" id="verdictSrc">Pick an example, upload a file, or record</span>
-      </div>
-
-      <div class="prob">
-        <div class="prob-head">
-          <p class="lab">P(complete)</p>
-          <p class="prob-num" id="probNum">0.000</p>
-        </div>
-        <div class="meter" id="meter">
-          <div class="meter-track">
-            <div class="meter-fill" id="meterFill"></div>
-            <div class="meter-ticks" aria-hidden="true"></div>
-            <div class="meter-needle" id="meterNeedle" aria-hidden="true"></div>
-            <div class="meter-gate" id="meterGate"><span class="gate-flag" id="gateFlag">0.50</span></div>
-          </div>
-          <div class="meter-scale" aria-hidden="true"><span>0</span><span>0.5</span><span>1</span></div>
-        </div>
-      </div>
-
-      <dl class="stats">
-        <div class="stat"><dt>Latency</dt><dd id="sLat">--</dd></div>
-        <div class="stat"><dt>Model file</dt><dd id="sSize">--</dd></div>
-        <div class="stat"><dt>Window</dt><dd id="sWin">--</dd></div>
-        <div class="stat"><dt>Clip</dt><dd id="sDur">--</dd></div>
-      </dl>
-
-      <p class="fineprint" id="modelNote"></p>
-    </section>
-
     <section class="panel p-wave">
-      <h2 class="ptitle"><span class="num">03</span> Signal</h2>
+      <h2 class="ptitle"><span class="num">02</span> Signal</h2>
       <canvas id="wave" class="cv" height="150"></canvas>
       <p class="cap" id="waveCap">The model reads the last 8 s. Shorter clips are padded with silence on the left.</p>
     </section>
 
     <section class="panel p-stream">
-      <h2 class="ptitle"><span class="num">04</span> Streaming
+      <h2 class="ptitle"><span class="num">03</span> Streaming
         <span class="ptitle-note" id="streamNote"></span>
       </h2>
       <canvas id="chart" class="cv" height="230"></canvas>
