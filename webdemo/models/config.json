@@ -1,0 +1,30 @@
+{
+  "models": [
+    {
+      "id": "whisper",
+      "file": "turn_whisper_int8.onnx",
+      "label": "Whisper-Tiny encoder (E2)",
+      "size_mb": 9.25,
+      "threshold": 0.4,
+      "params": 7885953,
+      "fp32_threshold": 0.63,
+      "decision_agreement": 0.9967,
+      "test_acc": 0.96,
+      "test_auc": 0.9887
+    },
+    {
+      "id": "tinymel",
+      "file": "turn_tinymel_int8.onnx",
+      "label": "TinyMelNet, distilled (E5)",
+      "size_mb": 2.0,
+      "threshold": 0.55,
+      "params": 507265,
+      "fp32_threshold": 0.57,
+      "decision_agreement": 0.9983,
+      "test_acc": 0.8667,
+      "test_auc": 0.9613
+    }
+  ],
+  "sample_rate": 16000,
+  "window_seconds": 8.0
+}
