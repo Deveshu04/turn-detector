@@ -244,7 +244,12 @@
   function prep(canvas) {
     var dpr = Math.min(window.devicePixelRatio || 1, 2);
     var w = canvas.clientWidth || 600;
-    var h = parseInt(canvas.getAttribute('height'), 10);
+    // Latch the logical height on the first pass. Assigning canvas.height
+    // rewrites the height content attribute, so reading that attribute back
+    // on the next call would return the already scaled value and the canvas
+    // would grow by one dpr factor on every redraw.
+    if (!canvas.dataset.h) canvas.dataset.h = canvas.getAttribute('height') || '150';
+    var h = parseInt(canvas.dataset.h, 10);
     canvas.width = Math.round(w * dpr);
     canvas.height = Math.round(h * dpr);
     canvas.style.height = h + 'px';
@@ -625,6 +630,11 @@
 
   var recorder = null, recStream = null, recChunks = [], recStart = 0;
   var recTick = null, recCap = null;
+  // 'idle' | 'opening' | 'recording'. Guards against a second session being
+  // opened while getUserMedia is still pending, which used to leave an
+  // orphaned interval that nothing held a handle to any more.
+  var recPhase = 'idle';
+  var recGen = 0;
 
   function pickMime() {
     var opts = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
@@ -634,46 +644,84 @@
     return '';
   }
 
+  // Single teardown path for the timer and the button. Safe to call twice.
+  function clearRecTimers() {
+    if (recTick !== null) { clearInterval(recTick); recTick = null; }
+    if (recCap !== null) { clearTimeout(recCap); recCap = null; }
+  }
+
+  function resetRecUi() {
+    clearRecTimers();
+    recPhase = 'idle';
+    el.recBtn.dataset.rec = '0';
+    el.recState.textContent = 'Record';
+    el.recHint.textContent = 'Speak, then stop. Max 30 s.';
+  }
+
+  function releaseStream() {
+    if (recStream) {
+      recStream.getTracks().forEach(function (t) { t.stop(); });
+      recStream = null;
+    }
+  }
+
   function stopRecording() {
+    if (recPhase === 'idle') return;
+    // Stop the clock now. MediaRecorder.onstop is asynchronous, so leaving
+    // teardown to the event let the counter run on past the click.
+    recGen++;
+    resetRecUi();
     if (recorder && recorder.state !== 'inactive') recorder.stop();
+    else releaseStream();
   }
 
   function startRecording() {
+    if (recPhase !== 'idle') return;
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
       note('This browser does not expose a microphone recording API.');
       return;
     }
+    recPhase = 'opening';
+    var gen = ++recGen;
+    el.recState.textContent = 'Waiting for mic';
     navigator.mediaDevices.getUserMedia({
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true }
     }).then(function (stream) {
+      // The user cancelled while the permission prompt was up.
+      if (gen !== recGen) {
+        stream.getTracks().forEach(function (t) { t.stop(); });
+        return;
+      }
       recStream = stream;
       recChunks = [];
       var mime = pickMime();
       recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
       recorder.ondataavailable = function (e) { if (e.data && e.data.size) recChunks.push(e.data); };
       recorder.onstop = function () {
-        clearInterval(recTick);
-        clearTimeout(recCap);
-        recStream.getTracks().forEach(function (t) { t.stop(); });
-        el.recBtn.dataset.rec = '0';
-        el.recState.textContent = 'Record';
-        el.recHint.textContent = 'Speak, then stop. Max 30 s.';
+        resetRecUi();
+        releaseStream();
         var blob = new Blob(recChunks, { type: recorder.mimeType || 'audio/webm' });
         if (!blob.size) { note('Nothing was captured.'); return; }
         markChip(null);
         blob.arrayBuffer().then(function (buf) { return loadBuffer(buf, 'Microphone'); });
       };
       recorder.start();
+      recPhase = 'recording';
       recStart = performance.now();
       el.recBtn.dataset.rec = '1';
+      el.recState.textContent = 'Recording 0.0 s';
       el.recHint.textContent = 'Click again to stop.';
       note('');
+      clearRecTimers();
       recTick = setInterval(function () {
+        if (recPhase !== 'recording') { clearRecTimers(); return; }
         el.recState.textContent = 'Recording ' +
           ((performance.now() - recStart) / 1000).toFixed(1) + ' s';
       }, 100);
       recCap = setTimeout(stopRecording, MAX_RECORD_MS);
     }).catch(function (err) {
+      if (gen !== recGen) return;
+      resetRecUi();
       note('Microphone blocked or unavailable. ' + (err && err.name ? err.name : ''));
     });
   }
@@ -704,8 +752,10 @@
     });
 
     el.recBtn.addEventListener('click', function () {
-      if (el.recBtn.dataset.rec === '1') stopRecording();
-      else startRecording();
+      // Keyed off the real phase, not the button attribute, so a click while
+      // the permission prompt is open cancels instead of opening a second one.
+      if (recPhase === 'idle') startRecording();
+      else stopRecording();
     });
 
     el.file.addEventListener('change', function () {
